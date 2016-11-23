@@ -478,9 +478,9 @@ def load_data(dataset):
 
 
 class CifarNet(object):
-    def __init__(self, initial_mu=0.9, initial_learning_rate=0.01, n_epochs=50, dataset='./cifar-10',
+    def __init__(self, initial_mu=0.9, initial_learning_rate=0.01, n_epochs=80, dataset='./cifar-10',
                  nkerns=[64, 64, 128, 128, 256, 256],
-                 batch_size=500, lam_l2=0.001, train_divisor=1, cf_type='L2', lam_contractive=100, phase='Train'):
+                 batch_size=128, lam_l2=0.001, train_divisor=1, cf_type='L2', lam_contractive=100, phase='Train'):
         """ CifarNet on Cifar10 dataset
 
         :type learning_rate: float
@@ -527,8 +527,8 @@ class CifarNet(object):
 
         # BUILD ACTUAL MODEL
         print('... building the model')
-        self.rng = numpy.random.RandomState(23455)
-        self.srng = RandomStreams(self.rng.randint(3948584))
+        self.rng = numpy.random.RandomState(234567)
+        self.srng = RandomStreams(self.rng.randint(1239))
         # Reshape matrix of rasterized image of shape(batch_size, 32* 32)  to 4D tensor
         layer0_input = x.reshape((self.net_batch_size, 3, 32, 32))
 
@@ -594,8 +594,8 @@ class CifarNet(object):
         self.masks = self.layer8.mask + self.layer7.mask + self.layer6.mask + self.layer4.mask + self.layer3.mask + self.layer1.mask + self.layer0.mask
         L2params = [self.layer8.W, self.layer7.W, self.layer6.W, self.layer4.W, self.layer3.W, self.layer1.W,
                     self.layer0.W]
-        velocities = self.layer8.velocity + self.layer7.velocity + self.layer6.velocity + self.layer4.velocity + self.layer3.velocity + self.layer1.velocity + self.layer0.velocity
-
+        self.velocities = self.layer8.velocity + self.layer7.velocity + self.layer6.velocity + self.layer4.velocity + self.layer3.velocity + self.layer1.velocity + self.layer0.velocity
+        self.log_init()
         ############
         # Cost Function Definition
         ############
@@ -613,7 +613,9 @@ class CifarNet(object):
         elif cf_type == 'Contract_Likelihood':
             delta_L_to_x = T.grad(self.layer8.negative_log_likelihood(y), x)
             delta_norm = T.sum(delta_L_to_x ** 2) / T.shape(x)[0]
-            cost = self.layer8.negative_log_likelihood(y) + lam_contractive * (delta_norm) + regularization
+            cost = self.layer8.negative_log_likelihood(y) + lam_contractive * (delta_norm) 
+        elif cf_type == 'no_regular':
+            cost = self.layer8.negative_log_likelihood(y)
 
         ########
         # Update Function
@@ -627,10 +629,10 @@ class CifarNet(object):
         self.mu = mu
         # momentum update
         updates = [(param_i, param_i - learning_rate * grad_i + mu * v_i)
-                   for param_i, grad_i, v_i in zip(self.params, grads, velocities)]
+                   for param_i, grad_i, v_i in zip(self.params, grads, self.velocities)]
 
         updates += [(v_i, mu * v_i - learning_rate * grad_i)
-                    for grad_i, v_i in zip(grads, velocities)]
+                    for grad_i, v_i in zip(grads, self.velocities)]
 
         self.test_model = theano.function(
             [self.index],
@@ -687,12 +689,23 @@ class CifarNet(object):
         # Adversarial related functions
         ########
         score = self.layer8.p_y_given_x_log[0][tclass]
-        self.proby = theano.function([x, tclass], score, allow_input_downcast=True, givens={switch_train:numpy.cast['int32'](0)})
+        self.proby = theano.function([x, tclass], [score, self.layer8.y_pred], allow_input_downcast=True, givens={switch_train:numpy.cast['int32'](0)})
         class_grads = T.grad(score, x)
         self.ygradsfunc = theano.function([x, tclass], class_grads, allow_input_downcast=True, givens={switch_train:numpy.cast['int32'](0)})
 
     def get_grad_and_proby_func(self):
         return self.ygradsfunc, self.proby
+
+    def log_init(self):
+        self.params_init = []
+        for i in range(len(self.params)):
+            self.params_init.append(self.params[i].get_value())
+
+    def init_by_log(self):
+        for i in range(len(self.params)):
+            self.params[i].set_value(self.params_init[i])
+            vel_shape = self.velocities[i].get_value().shape
+            self.velocities[i].set_value(numpy.zeros(vel_shape,dtype=theano.config.floatX))
 
     def train(self, n_epochs):
         ##### TRAIN MODEL
@@ -772,22 +785,22 @@ class CifarNet(object):
 
     def connection_count(self):
         flatten_mask = 0
-        for i in range(8):
+        for i in range(len(self.params)):
             normal_group = numpy.sum(self.masks[i].get_value())
             flatten_mask += normal_group
         return flatten_mask
 
     def resume_all(self, params, masks):
-        for i in range(8):
+        for i in range(len(self.params)):
             self.params[i].set_value(params[i].get_value())
             self.masks[i].set_value(masks[i].get_value())
 
     def resume_mask(self, masks):
-        for i in range(8):
+        for i in range(len(self.params)):
             self.masks[i].set_value(masks[i].get_value())
 
     def inject_fault(self, probability):
-        for i in range(8):
+        for i in range(len(self.params)):
             mask_group = self.masks[i].get_value()
             group_shape = mask_group.shape
             mask_group = numpy.reshape(mask_group, (-1))
@@ -800,79 +813,103 @@ class CifarNet(object):
         test_score = numpy.mean(test_losses)
         return test_score
 
+    def get_accuracy(self):
+        test_losses = [self.test_model(i) for i in range(self.n_test_batches)]
+        test_score = numpy.mean(test_losses)
+        return test_score
 
 def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target_class):
     transform_img = [numpy.copy(image)]
-
     conflist = []
     epoch = 0
-    while epoch < 1000:
-        probyvalue = numpy.exp(proby(transform_img, target_class))
+    last_step_size = 0.
+    while epoch < 200:
+        probyvalue, cur_y= proby(transform_img, target_class)
+        probyvalue = numpy.exp(probyvalue)
         gradsvalue = gradsfunc(transform_img, target_class)
         gradmag = (numpy.sum(gradsvalue ** 2)) ** 0.5
 
         if epoch % 10 == 0:
-            print("Epoch %i : confidence is %e, and grad is %e" % (epoch, probyvalue, gradmag))
+            print("Epoch %i : confidence is %e, grad is %e, and last step is %e" % (epoch, probyvalue, gradmag, last_step_size))
             conflist.append(probyvalue)
 
-        if probyvalue > 0.99:
+        # if probyvalue > 0.55:
+        if cur_y == target_class:
             # if probyvalue > 0.99 and gradmag < 1e-4:
             print("Epoch %i : confidence is %e, and grad is %e" % (epoch, probyvalue, gradmag))
             break
 
-        p = gradsvalue.reshape(784, 1)
-        p *= 0.01 / gradmag
-        t = p.T.dot(p) * 0
+        p = gradsvalue.reshape(32*32*3, 1)
+        p *= 0.1 / gradmag
+        t = p.T.dot(p) * 0.
+        #if last_step_size >= 500.:
         step_size = 40.
-        if epoch > 1000:
-            step_size = 400.
-        f_x_k = numpy.exp(proby(transform_img, target_class))
-        upper_bound_img = numpy.ones((784,))
-        lower_bound_img = numpy.zeros((784,))
-        predict_img = transform_img[0] + step_size * p.reshape(784, )
+        #else:
+            #step_size = last_step_size + 50
+        #if epoch > 1000:
+            #step_size = 400.
+
+        f_x_k = numpy.exp(proby(transform_img, target_class)[0])
+        upper_bound_img = numpy.ones((32*32*3,))*255
+        lower_bound_img = numpy.zeros((32*32*3,))
+        predict_img = transform_img[0] + step_size * p.reshape(32*32*3, )
         predict_img = numpy.maximum(lower_bound_img, numpy.minimum(predict_img, upper_bound_img))
-        while numpy.exp(proby([predict_img], target_class)) < f_x_k + step_size * t:
-            predict_img = transform_img[0] + step_size * p.reshape(784, )
+        btcount = 0
+        while numpy.exp(proby([predict_img], target_class)[0]) < f_x_k + step_size * t:
+            predict_img = transform_img[0] + step_size * p.reshape(32*32*3, )
             predict_img = numpy.maximum(lower_bound_img, numpy.minimum(predict_img, upper_bound_img))
             step_size *= 0.8
+            btcount += 1
+            if step_size < 1e-6:
+                predict_img = transform_img[0] + p.reshape(32*32*3, )
+                break
+            #print("backtracking count is %d"%btcount)
+        last_step_size = step_size
 
         transform_img[0] = predict_img
         epoch += 1
-    return [conflist, transform_img]
+    return [conflist, transform_img, cur_y]
 
 
-def dump_mnist(fname, gradsfunc, proby):
-    # MNIST
-    dataf = gzip.open('mnist.pkl.gz', 'rb')
-    train_set, valid_set, test_set = pickle.load(dataf)
+def dump_mnist(fname, gradsfunc, proby,folder):
+    # CIFAR
+    dataf = open('./cifar-10/test_batch', 'rb')
+    dataset = pickle.load(dataf)
     dataf.close()
-    test_x = test_set[0]
-    test_y = test_set[1]
+    test_x = dataset['data']
+    test_y = dataset['labels']
     confidence_data = []
-    for i in range(200):
-        print("evaluate MNIST %i" % i)
+    for i in range(100):
+        print("evaluate CIFAR10 %i" % i)
         target_class_list = range(10)
         target_class_list.remove(test_y[i])
         for target_class in target_class_list:
-            ori_img = numpy.asarray(test_x[i], dtype=theano.config.floatX)
-            confidence_list, reimg = find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, ori_img,
+            ori_img = numpy.asarray(test_x[i,:], dtype=theano.config.floatX)
+            confidence_list, reimg, cur_y = find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, ori_img,
                                                                                   target_class)
-            confidence_data.append([[test_y[i], target_class], [ori_img, reimg], confidence_list])
-    f = open('./eval_efforts/Constraint_mnist_GDBack_Compression_' + fname + '.pkl', 'wb')
+            if len(confidence_list)==0 and len(reimg) == 0:
+                continue
+            confidence_data.append([[test_y[i], target_class, cur_y ], [ori_img, reimg], confidence_list])
+    f = open('./eval_efforts_rough/Constraint_mnist_GDBack_Compression_'+folder+'_' + fname + '.pkl', 'wb')
     pickle.dump(confidence_data, f, protocol=pickle.HIGHEST_PROTOCOL)
     f.close()
 
 
-def compression():
-    nn = CifarNet(cf_type='L2')
+def compression(folder,cf):
+    nn = CifarNet(cf_type=cf)
+
+    #Resume the parameter for original complete network
+    f = open('./Compression/INITIAL/'+cf+'.pkl', 'rb')
+    load_value = pickle.load(f)
+    nn.resume_all(load_value[0], load_value[1])
+    f.close()
+    # if 'LOGINIT' in folder:
+    #     nn.log_init()
+
     while nn.connection_count() > 0:
+
+        #Remove Redundant Edges
         connection_count = nn.connection_count()
-        print('******connection count is %d******' % connection_count)
-        params, masks, test_score, gradstoPP = nn.train(50)
-        f = open('./Compression/L2EN3/connection_count_' + str(connection_count) + '.pkl', 'wb')
-        pickle.dump([params, masks, test_score, gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
-        f.close()
-        break
         flatten_params = []
         for i in range(len(nn.params)):
             params_group = numpy.reshape(nn.params[i].get_value(), (-1))
@@ -883,15 +920,20 @@ def compression():
         flatten_params = map(lambda x: abs(x), flatten_params)
         flatten_params.sort()
 
-        #TODO modify these parameters
-        if connection_count > 50000:
-            remove_edge_number = 10000
-        elif connection_count > 2000:
-            remove_edge_number = 1000
-        elif connection_count > 150:
-            remove_edge_number = 50
-        else:
+
+        remove_edge_number = int(connection_count * 0.1)
+        if connection_count < 20000:
             break
+        # if connection_count > 100000:
+        #     remove_edge_number = 50000
+        # elif connection_count > 50000:
+        #     remove_edge_number = 10000
+        # elif connection_count > 5000:
+        #     remove_edge_number = 2500
+        #elif connection_count > 150:
+            #remove_edge_number = 50
+        # else:
+        #     break
 
         thval = flatten_params[remove_edge_number]
         for i in range(len(nn.params)):
@@ -906,52 +948,80 @@ def compression():
             mask_group.resize(group_shape)
             nn.masks[i].set_value(mask_group)
 
+        #Retrain the network
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        if 'LOGINIT' in folder:
+            nn.init_by_log()
+        params, masks, test_score, gradstoPP = nn.train(50)
+        f = open('./Compression/'+folder+'/connection_count_' + str(connection_count) + '.pkl', 'wb')
+        pickle.dump([params, masks, test_score, gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+#
+# def reliability(fault_probability):
+#     nn = CifarNet()
+#     files = os.listdir('./Compression/L2EN3/')
+#     files = filter(lambda x: 'connection_count' in x, files)
+#     reliability = {}
+#     for fname in files:
+#         if int(fname.split("_")[2].split('.')[0]) > 40000:
+#             continue
+#         f = open('./Compression/L2EN3/' + fname, 'rb')
+#         load_value = pickle.load(f)
+#         nn.resume_all(load_value[0], load_value[1])
+#         f.close()
+#         connection_count = nn.connection_count()
+#         reliability[connection_count] = []
+#         for i in range(50):
+#             nn.resume_mask(load_value[1])
+#             test_score = nn.inject_fault(fault_probability)
+#             reliability[connection_count].append(test_score)
+#         print(fname)
+#         print(reliability[connection_count])
+#     f = open('./Compression_Result/reliability' + str(fault_probability) + '.pkl', 'wb')
+#     pickle.dump(reliability, f, protocol=pickle.HIGHEST_PROTOCOL)
+#     print(reliability)
 
 
-def reliability(fault_probability):
+def eval_accuracy(folder):
     nn = CifarNet()
-    files = os.listdir('./Compression/L2EN3/')
+    files = os.listdir('./Compression/'+folder+'/Selected')
     files = filter(lambda x: 'connection_count' in x, files)
-    reliability = {}
+    reliability={}
     for fname in files:
-        if int(fname.split("_")[2].split('.')[0]) > 40000:
-            continue
-        f = open('./Compression/L2EN3/' + fname, 'rb')
+        f = open('./Compression/'+folder+'/Selected/'+fname, 'rb')
         load_value = pickle.load(f)
         nn.resume_all(load_value[0], load_value[1])
         f.close()
         connection_count = nn.connection_count()
         reliability[connection_count] = []
-        for i in range(50):
-            nn.resume_mask(load_value[1])
-            test_score = nn.inject_fault(fault_probability)
-            reliability[connection_count].append(test_score)
-        print(fname)
-        print(reliability[connection_count])
-    f = open('./Compression_Result/reliability' + str(fault_probability) + '.pkl', 'wb')
+        # TODO implement accuracy function
+        test_loss = nn.get_accuracy()
+        reliability[connection_count].append(test_loss)
+    f = open('./Compression_Result/reliability_'+folder+'_'+str(0)+'.pkl','wb')
     pickle.dump(reliability, f, protocol=pickle.HIGHEST_PROTOCOL)
     print(reliability)
 
 
-def eval_adversarial_efforts(filelist):
+def eval_adversarial_efforts(filelist,folder):
     nn = CifarNet(batch_size=1)
     for fname in filelist:
-        f = open('./Compression/Selected/' + fname, 'rb')
+        f = open('./Compression/'+folder +'/Selected/'+ fname, 'rb')
         load_value = pickle.load(f)
         nn.resume_all(load_value[0], load_value[1])
         f.close()
         connection_count = nn.connection_count()
         grads, proby = nn.get_grad_and_proby_func()
-        dump_mnist(str(connection_count), grads, proby)
+        dump_mnist(str(connection_count), grads, proby, folder)
 
 
 if __name__ == '__main__':
     theano.sandbox.cuda.use("gpu" + sys.argv[1])
-    # files = os.listdir('./Compression/Selected/')
-    # files = files[int(sys.argv[2]):int(sys.argv[3])]
-    # eval_adversarial_efforts(files)
+    #for folder in ['LOGINIT_L2']:
+        #files = os.listdir('./Compression/'+folder+'/Selected/')
+        #files = files[int(sys.argv[2]):int(sys.argv[3])]
+        #eval_adversarial_efforts(files,folder)
+        #eval_accuracy(folder)
 
-    compression()
-    # nn = CifarNet(cf_type='L2')
-    # print(nn.connection_count())
-    # theano.printing.pydotprint(nn.train_model, outfile="pics/pydotprint_train_model_contract_likelihood.png",var_with_name_simple=True)
+    compression(sys.argv[2], cf=sys.argv[3])

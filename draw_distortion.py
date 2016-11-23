@@ -2,7 +2,7 @@ import cPickle, gzip, numpy
 import matplotlib.pyplot as plt
 import os
 import matplotlib.cm as cm
-from statistic import draw_accuracy_vs_NNsize
+from statistic import get_accuracy_vs_NNsize
 #Load the datasets
 # f = gzip.open('mnist.pkl.gz', 'rb')
 # train_set, valid_set, test_set = cPickle.load(f)
@@ -210,13 +210,26 @@ def distortion_L2(data_file):
     dataf = open(data_file,'rb')
     result = pickle.load(dataf)
 
-    target_dict = []
-    for i in result:
-        target_dict.append(numpy.linalg.norm(i[1][0]-i[1][1][0]))
+    distortion = []
+    effemask = []
 
-    tmp = numpy.asarray(target_dict)
-    tmp = numpy.mean(tmp)
-    return tmp
+    effcount = 0
+    for i in result:
+        tmp_norm = numpy.linalg.norm(i[1][0]-i[1][1][0])
+        distortion.append(tmp_norm)
+        if len(i[0]) == 3:
+            if numpy.isnan(numpy.sum(i[1][1][0])) or i[0][2] != i[0][1]:
+                effemask.append(0)
+                distortion[-1] = -1
+                continue
+        effemask.append(1)
+        effcount += 1
+    effratio = (effcount * 1.)/len(result)
+
+    tmp = numpy.asarray(distortion)
+    mtmp = numpy.mean(tmp)
+
+    return [mtmp,effratio,distortion,effemask]
 
 
 def check_output_range(data_file, evalbase='target'):
@@ -297,7 +310,7 @@ def draw_distortion_direction(data_file):
         tv = numpy.reshape(tv,(28,28))
         plt.imshow(tv, cmap=plt.get_cmap('gray'), vmin=tv.min(), vmax=tv.max())
         plt.savefig('./pert_direction/' + str(k[0]) + '_' + str(k[1]) + '_img.pdf')
-        continue
+        # continue
         for i in range(784):
             rowdata = v[i,1:-1]
             plt.plot(numpy.ones(rowdata.shape)*i*10,rowdata,linestyle='',marker='.',ms=4)
@@ -306,15 +319,156 @@ def draw_distortion_direction(data_file):
         plt.savefig('./pert_direction/'+str(k[0])+'_'+str(k[1])+'.pdf')
         plt.close()
 
+def Cifar():
+    fig, (ax0, ax1) = plt.subplots(nrows=2, sharex=True)
+
+    folders = [
+        'NO_REGULAR',
+        # 'CONTRACT_LIKE',
+        # 'CONTRACT_LIKE_L2EN3',
+        'L2',
+        'LOGINIT_L2',
+        # 'L2_RATIO'
+        # 'CC_NO_REGULAR',
+        # 'CC_LOGINIT_NO_REGULAR',
+        # 'LOGINIT_CONTRACT_LIKE',
+        # 'FC_LOGINIT_CONTRACT_LIKE',
+        # 'CC_CONTRACT_LIKE'
+        # 'PCC_LOGINIT_NO_REGULAR',
+        # 'FC_LOGINIT_NO_REGULAR_40',
+        'LOGINIT_NO_REGULAR'
+    ]
+
+    global_mask_exist = False
+    global_distortion = []
+    global_x =[]
+    for folder in folders:
+        files = os.listdir('./CifarNet/eval_efforts_rough/')
+        files = filter(lambda a: "Constraint_mnist_GDBack_Compression_" + folder == '_'.join(a.split('_')[:-1]), files)
+        models = map(lambda a: a.replace("Constraint_mnist_GDBack_Compression_" + folder, ""), files)
+
+        # Directly draw the distortion result
+        x = []
+        y1 = []
+        y2 = []
+
+        # Only compare the same sample
+        dist_matrix = []
+        dist_mask = []
+
+        for model in models:
+            print(folder + model)
+            if os.path.exists('./CifarNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_' + folder + model):
+                x.append(float(model.split('_')[-1].split('.pkl')[0]))
+                result = distortion_L2('./CifarNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_' + folder + model)
+                y1.append(result[0])
+                y2.append(result[1])
+                dist_matrix.append(result[2])
+                dist_mask.append(result[3])
+            else:
+                print(folder + model + 'not_found')
+
+        global_distortion.append(dist_matrix)
+        global_x.append(x)
+
+        if not global_mask_exist:
+            dist_mask = numpy.asarray(dist_mask)
+            global_mask = numpy.prod(dist_mask,axis=0)
+            global_mask_exist = True
+        else:
+            dist_mask = numpy.asarray(dist_mask)
+            tmp_mask = numpy.prod(dist_mask,axis=0)
+            global_mask *= tmp_mask
+
+    # remove uncommon sample
+    for i in range(len(folders)):
+        folder = folders[i]
+        dist_matrix = numpy.asarray(global_distortion[i])
+        effective_samples = numpy.sum(global_mask)
+        mask_expand = global_mask.reshape((1,global_mask.shape[0])).repeat(dist_matrix.shape[0],0)
+        dist_matrix *= mask_expand
+        dist_matrix = numpy.sum(dist_matrix,axis=1)/effective_samples
+        y1 = list(numpy.squeeze(dist_matrix.reshape(1,-1)))
+        x = global_x[i]
+
+        x_sort, y1 = zip(*(sorted(zip(x, y1))))
+        ax0.plot(x_sort, y1, label=folder)
+
+        x, y = get_accuracy_vs_NNsize('CifarNet',folder)
+        ax1.plot(x, y, label=folder)
+    # ax1.set_ylim([0.9, 1])
+    # plt.hlines(0,0,431080)
+    plt.legend(loc=0)
+    plt.gca().invert_xaxis()
+    plt.show()
+    exit()
+
+def LeNet():
+
+    fig, (ax0,ax1) = plt.subplots(nrows=2,sharex=True)
+    for folder in [
+                    'NO_REGULAR',
+                   # 'LOGINIT_NO_REGULAR_0.05',
+                   'LOGINIT_NO_REGULAR',
+                   #  'LOGINIT_NO_REGULAR_0.15'
+                    'CONTRACT_LIKE',
+                    # 'CONTRACT_LIKE_L2EN3',
+                    'L2EN3',
+                    'LOGINIT_L2EN3',
+                    # 'CC_NO_REGULAR',
+                    # 'CC_LOGINIT_NO_REGULAR',
+                    'LOGINIT_CONTRACT_LIKE',
+                    # 'FC_LOGINIT_CONTRACT_LIKE',
+                    # 'CC_CONTRACT_LIKE'
+                    # 'LBL_LOGINIT_NO_REGULAR',
+                    # 'PCC_LOGINIT_NO_REGULAR',
+                    # 'FC_LOGINIT_NO_REGULAR_40',
+                    # 'LOGINIT_NO_REGULAR',
+                    # 'MIX_LOGINIT_L2_NO_REGULAR',
+                    # 'MIX_LOGINIT_NO_REGULAR_L2'
+                    ]:
+        files = os.listdir('./LeNet/eval_efforts_rough/')
+        files = filter(lambda a: "Constraint_mnist_GDBack_Compression_"+folder == '_'.join(a.split('_')[:-1]), files)
+        models = map(lambda a: a.replace("Constraint_mnist_GDBack_Compression_"+folder,""), files)
+        x = []
+        y = []
+
+        for model in models:
+            print(folder+model)
+            if os.path.exists('./LeNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_'+folder+model):
+                x.append(float(model.split('_')[-1].split('.pkl')[0]))
+                y.append(distortion_L2('./LeNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_'+folder+model)[0])
+            else:
+                print(folder+model+'not_found')
+
+        # y = map(lambda a: a - y[-1],y)
+        x,y = zip(*(sorted(zip(x,y))))
+        ax0.plot(x,y,label=folder)
+        x,y = get_accuracy_vs_NNsize('LeNet',folder)
+        ax1.plot(x,y,label=folder)
+    ax1.set_ylim([0.9,1])
+    # plt.hlines(0,0,431080)
+    plt.legend(loc=0)
+    plt.gca().invert_xaxis()
+    plt.show()
+    exit()
+
 if __name__ == '__main__':
 
-    models1 = ["RandInit_Contract5_all_e0",
-    "RandInit_Contract5_e0_L2_en2_all",
-    "RandInit_FGS_0.1",
-    "RandInit_L2R_en3",
-    "RandInit",
-    "RandInit_Distiliation_10",
-    "RandInit_Distiliation_20"]
+    # models1 = [
+    # "RandInit_Contract5_all_e0",
+    # "RandInit_Contract_Like_e0_all",
+    # "RandInit_Contract_Like_e2_all",
+    # "RandInit_Contract_Like_e1_all",
+    # "RandInit_Contract_Like_e3_all",
+    # # "RandInit_FGS_0.1",
+    # "RandInit_L2R_en3",
+    # "RandInit_L2R_en2",
+    #
+    # "RandInit",
+    # "RandInit_Distiliation_10",
+    # "RandInit_Distiliation_20"
+    #            ]
 
     # models1 = [
     # # "RandInit_Contract5_e0_L2_en3_all",
@@ -326,87 +480,43 @@ if __name__ == '__main__':
     # ]
     #
     # for model in models1:
-    #     plot_distortion('./eval_efforts/Constraint_mnist_GDBack_'+model+'.pkl')
+    #     plot_distortion('./LeNet/eval_efforts/Constraint_mnist_GDBack_'+model+'.pkl')
     # plt.show()
     # exit()
 
 
-    models = [
-        "Constraint_mnist_GDBack_Compression_1030.0.pkl",
-        "Constraint_mnist_GDBack_Compression_2080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_4080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_6080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_8080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_10080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_12080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_14080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_16080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_18080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_20080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_24080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_28080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_32080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_36080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_40080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_51080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_81080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_131080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_181080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_231080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_281080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_331080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_381080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_431080.0.pkl"
-    ]
+    # models = [
+    #     ["_2080.0.pkl"],
+    #     ["_4080.0.pkl"],
+    #     ["_6080.0.pkl"],
+    #     ["_8080.0.pkl"],
+    #     ["_10080.0.pkl"],
+    #     ["_12080.0.pkl"],
+    #     ["_14080.0.pkl"],
+    #     ["_16080.0.pkl"],
+    #     ["_18080.0.pkl"],
+    #     ["_20080.0.pkl"],
+    #     ["_22080.0.pkl"],
+    #     ["_24080.0.pkl"],
+    #     ["_26080.0.pkl"],
+    #     ["_28080.0.pkl"],
+    #     ["_30080.0.pkl"],
+    #     ["_32080.0.pkl"],
+    #     ["_36080.0.pkl"],
+    #     ["_38080.0.pkl"],
+    #     ["_40080.0.pkl"],
+    #     ["_51080.0.pkl"],
+    #     ["_71080.0.pkl"],
+    #     ["_91080.0.pkl"],
+    #     ["_111080.0.pkl"],
+    #     ["_151080.0.pkl"],
+    #     ["_201080.0.pkl"],
+    #     ["_251080.0.pkl"],
+    #     ["_301080.0.pkl"],
+    #     ["_351080.0.pkl"],
+    #     ["_391080.0.pkl"],
+    #     ["_431080.0.pkl"]
+    # ]
 
-
-
-    # plot_distortion('./eval_efforts/Constraint_mnist_GDBack_RandInit.pkl')
-    # plot_distortion('./eval_efforts/Constraint_mnist_GDBack_RandInit_Contract5_all_e0.pkl')
-    # plot_distortion('./eval_efforts/Constraint_mnist_GDBack_RandInit_FGS_0.1.pkl')
-    # plot_distortion('./eval_efforts/Constraint_mnist_GDBack_RandInit_Contract5_e0_L2_en3_all.pkl')
-    # plot_distortion('./eval_efforts/Constraint_mnist_GDBack_RandInit_Distiliation_10.pkl')
-    x = map(lambda x: x.split('_')[-1].split('.pkl')[0],models)
-    y = []
-    for model in models:
-        print(model)
-        y.append(distortion_L2('./eval_efforts/'+model))
-    plt.plot(x,y,'b')
-
-    models = [
-        "Constraint_mnist_GDBack_Compression_Contract_Like_1030.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_2080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_4080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_6080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_8080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_10080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_12080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_14080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_16080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_18080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_24080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_28080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_32080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_36080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_40080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_51080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_111080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_201080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_251080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_301080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_351080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_391080.0.pkl",
-        "Constraint_mnist_GDBack_Compression_Contract_Like_431080.0.pkl"
-    ]
-    x = map(lambda x: x.split('_')[-1].split('.pkl')[0],models)
-    y = []
-    for model in models:
-        print(model)
-        y.append(distortion_L2('./eval_efforts/'+model))
-    plt.plot(x,y,'r')
-
-    # draw_accuracy_vs_NNsize()
-    # plt.gca().invert_xaxis()
-    plt.show()
-    exit()
-
+    # Cifar()
+    LeNet()

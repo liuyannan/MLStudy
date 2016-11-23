@@ -814,7 +814,7 @@ class LeNet(object):
 
         delta_L_to_x = T.grad(self.layer3.negative_log_likelihood(y), x)
         delta_norm = T.mean(T.sum(delta_L_to_x ** 2, axis=1) ** 0.5)
-        cost = self.layer3.negative_log_likelihood(y) + lam_contractive * delta_norm + lam_l2 * paramssum
+        cost = self.layer3.negative_log_likelihood(y) + lam_contractive * delta_norm
         # cost = self.layer3.negative_log_likelihood(y) + regularization
 
         testnorm = T.sum((theano.gradient.jacobian(y_score_given_x[0], layer3_input)[:,0,:])**2)**0.5
@@ -957,8 +957,6 @@ class LeNet(object):
                     this_validation_loss = numpy.mean(validation_losses)
                     print('epoch %i, minibatch %i/%i, validation error %f %%' % (
                         epoch, minibatch_index + 1, self.n_train_batches, this_validation_loss * 100.))
-                if iter % 2 == 0:
-                    print('training @ iter = ', iter)
                 self.train_model(minibatch_index)
 
 
@@ -1329,6 +1327,6 @@ if __name__ == '__main__':
     theano.sandbox.cuda.use("gpu0")
     nn = LeNet(lam_contractive=1,n_epochs=40,lam_l2=0.001)
     params = nn.train()
-    f = open('./weight/normal_weights_RandInit_Contract_Like_e0_L2_en3_all.pkl', 'wb')
+    f = open('./weight/normal_weights_RandInit_Contract_Like_e0_all.pkl', 'wb')
     pickle.dump(params, f, protocol=pickle.HIGHEST_PROTOCOL)
     f.close()

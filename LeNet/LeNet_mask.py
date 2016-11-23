@@ -16,6 +16,12 @@ import random
 import theano.sandbox.cuda
 import shutil
 
+import matplotlib
+matplotlib.use('Agg')
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
 
 class LeNetConvPoolLayer(object):
     '''Pool Layer of a convolutional network '''
@@ -449,7 +455,7 @@ def load_data(dataset):
 
 class LeNet(object):
     def __init__(self, mu=0.5, learning_rate=0.1, n_epochs=40, dataset='mnist.pkl.gz', nkerns=[20, 50],
-                 batch_size=500, lam_l2=0.001, train_divisor=1, cf_type='L2',lam_contractive=100):
+                 batch_size=500, lam_l2=0.001, train_divisor=1, cf_type='L2',lam_contractive=1000):
         """ Demonstrates lenet on MNIST dataset
 
         :type learning_rate: float
@@ -537,7 +543,8 @@ class LeNet(object):
         self.params = self.layer3.params + self.layer2.params + self.layer1.params + self.layer0.params
         self.masks = self.layer3.mask + self.layer2.mask + self.layer1.mask + self.layer0.mask
         L2params = [self.layer3.W, self.layer2.W, self.layer1.W, self.layer0.W]
-        velocities = self.layer3.velocity + self.layer2.velocity + self.layer1.velocity + self.layer0.velocity
+        self.velocities = self.layer3.velocity + self.layer2.velocity + self.layer1.velocity + self.layer0.velocity
+        self.log_init()
 
         ############
         # Cost Function Definition
@@ -549,29 +556,18 @@ class LeNet(object):
 
         regularization = lam_l2 * paramssum
 
+        delta_L_to_x = T.grad(self.layer3.negative_log_likelihood(y), x)
+        # delta_norm = T.sum(delta_L_to_x ** 2) / T.shape(x)[0]
+        delta_norm = T.mean(T.sum(delta_L_to_x ** 2, axis=1) ** 0.5)
+
         if cf_type == 'L2':
             cost = self.layer3.negative_log_likelihood(y) + regularization
-        elif cf_type == 'Contract_original':
-            y_predict = self.layer3.p_y_given_x
-            # y to x contractive
-            yline = y_predict.flatten(1)
-            delta_y_to_x = theano.gradient.jacobian(yline,x)
-            delta_L2_norm = T.sum(delta_y_to_x**2)/T.shape(x)[0]
-            # delta_y_to_x, _ = theano.scan(lambda ind, yi, y_predict, x: (theano.gradient.jacobian(y_predict[ind,yi], x))[ind,:]
-            #     , sequences=[T.arange(self.train_batch_size),y], non_sequences=[y_predict, x])
-            # delta_L2_norm = T.mean((T.sum((delta_y_to_x.flatten(2) ** 2), axis=1) ** 0.5))
-            cost = self.layer3.negative_log_likelihood(y) + lam_contractive * (delta_L2_norm) + regularization
-
         elif cf_type =='Contract_Likelihood':
-            delta_L_to_x = T.grad(self.layer3.negative_log_likelihood(y),x)
-            delta_norm = T.sum(delta_L_to_x**2)/T.shape(x)[0]
-            cost = self.layer3.negative_log_likelihood(y) + lam_contractive * (delta_norm) + regularization
-        elif cf_type == 'No_Regular':
+            cost = self.layer3.negative_log_likelihood(y) + lam_contractive * delta_norm
+        elif cf_type == 'no_regular':
             cost = self.layer3.negative_log_likelihood(y)
-        elif cf_type == 'Solo_Contract_Likelihood':
-            delta_L_to_x = T.grad(self.layer3.negative_log_likelihood(y),x)
-            delta_norm = T.sum(delta_L_to_x**2)/T.shape(x)[0]
-            cost = self.layer3.negative_log_likelihood(y) + lam_contractive * (delta_norm)
+        elif cf_type =='Contract_Likelihood_L2':
+            cost = self.layer3.negative_log_likelihood(y) + lam_contractive * delta_norm + regularization
 
         ########
         # Update Function
@@ -581,10 +577,10 @@ class LeNet(object):
 
         # momentum update
         updates = [(param_i, param_i - learning_rate * grad_i + mu * v_i)
-                   for param_i, grad_i, v_i in zip(self.params, grads, velocities)]
+                   for param_i, grad_i, v_i in zip(self.params, grads, self.velocities)]
 
         updates += [(v_i, mu * v_i - learning_rate * grad_i)
-                    for grad_i, v_i in zip(grads, velocities)]
+                    for grad_i, v_i in zip(grads, self.velocities)]
 
         self.test_model = theano.function(
             [self.index],
@@ -632,16 +628,46 @@ class LeNet(object):
             }
         )
 
+        delta_L2xnorm_param_grads = T.grad(delta_norm, self.params)
+
+        self.L2xp = theano.function(
+            [self.index],
+            delta_L2xnorm_param_grads, allow_input_downcast=True,
+            givens={
+                x: self.train_set_x[self.index * self.net_batch_size:(self.index + 1) * self.net_batch_size],
+                y: self.train_set_y[self.index * self.net_batch_size:(self.index + 1) * self.net_batch_size]
+            }
+        )
+
         ########
         # Adversarial related functions
         ########
         score = self.layer3.p_y_given_x_log[0][tclass]
-        self.proby = theano.function([x, tclass], score, allow_input_downcast=True)
+        self.proby = theano.function([x, tclass], [score,self.layer3.y_pred], allow_input_downcast=True)
         class_grads = T.grad(score, x)
         self.ygradsfunc = theano.function([x, tclass], class_grads, allow_input_downcast=True)
+        self.all_proby = theano.function([x], self.layer3.p_y_given_x[0], allow_input_downcast=True)
+
+    def get_all_proby_func(self):
+        return self.all_proby
 
     def get_grad_and_proby_func(self):
         return self.ygradsfunc,self.proby
+
+    #TODO should we include this into training process
+    def get_L2xp(self):
+        return self.L2xp
+
+    def log_init(self):
+        self.params_init = []
+        for i in range(len(self.params)):
+            self.params_init.append(self.params[i].get_value())
+
+    def init_by_log(self):
+        for i in range(len(self.params)):
+            self.params[i].set_value(self.params_init[i])
+            vel_shape = self.velocities[i].get_value().shape
+            self.velocities[i].set_value(numpy.zeros(vel_shape,dtype=theano.config.floatX))
 
     def train(self,n_epochs):
         ##### TRAIN MODEL
@@ -744,14 +770,28 @@ class LeNet(object):
         test_score = numpy.mean(test_losses)
         return test_score
 
+    def get_accuracy(self):
+        test_losses = [self.test_model(i) for i in range(self.n_test_batches)]
+        test_score = numpy.mean(test_losses)
+        return test_score
+
 
 def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target_class):
+    '''
+    find the most closed adversarial input by GD
+    :param gradsfunc:
+    :param proby: calculate the probability of target class given the input
+    :param image: initial input
+    :param target_class:
+    :return:
+    '''
     transform_img = [numpy.copy(image)]
 
     conflist = []
     epoch = 0
     while epoch < 1000:
-        probyvalue = numpy.exp(proby(transform_img, target_class))
+        probyvalue, cur_y = proby(transform_img, target_class)
+        probyvalue = numpy.exp(probyvalue)
         gradsvalue = gradsfunc(transform_img, target_class)
         gradmag = (numpy.sum(gradsvalue ** 2)) ** 0.5
 
@@ -759,8 +799,8 @@ def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target
             print("Epoch %i : confidence is %e, and grad is %e" % (epoch, probyvalue, gradmag))
             conflist.append(probyvalue)
 
-        if probyvalue > 0.99:
-        # if probyvalue > 0.99 and gradmag < 1e-4:
+        # if probyvalue > 0.99:
+        if cur_y == target_class:
             print("Epoch %i : confidence is %e, and grad is %e" % (epoch, probyvalue, gradmag))
             break
 
@@ -770,12 +810,12 @@ def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target
         step_size = 40.
         if epoch > 1000:
             step_size = 400.
-        f_x_k = numpy.exp(proby(transform_img, target_class))
+        f_x_k = numpy.exp(proby(transform_img, target_class)[0])
         upper_bound_img = numpy.ones((784,))
         lower_bound_img = numpy.zeros((784,))
         predict_img = transform_img[0] + step_size * p.reshape(784, )
         predict_img = numpy.maximum(lower_bound_img,numpy.minimum(predict_img,upper_bound_img))
-        while numpy.exp(proby([predict_img], target_class)) < f_x_k + step_size * t:
+        while numpy.exp(proby([predict_img], target_class)[0]) < f_x_k + step_size * t:
             predict_img = transform_img[0] + step_size * p.reshape(784, )
             predict_img = numpy.maximum(lower_bound_img, numpy.minimum(predict_img, upper_bound_img))
             step_size *= 0.8
@@ -784,7 +824,15 @@ def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target
         epoch += 1
     return [conflist, transform_img]
 
-def dump_mnist(fname, gradsfunc, proby):
+def dump_mnist(fname, gradsfunc, proby, folder):
+    '''
+    Evaluate the adversarial efforts for MNIST set
+    :param fname:
+    :param gradsfunc:
+    :param proby:
+    :param folder:
+    :return:
+    '''
     #MNIST
     dataf = gzip.open('mnist.pkl.gz', 'rb')
     train_set, valid_set, test_set = pickle.load(dataf)
@@ -800,17 +848,23 @@ def dump_mnist(fname, gradsfunc, proby):
             ori_img = numpy.asarray(test_x[i],dtype=theano.config.floatX)
             confidence_list, reimg = find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, ori_img, target_class)
             confidence_data.append([[test_y[i], target_class], [ori_img, reimg], confidence_list])
-    f = open('./eval_efforts/Constraint_mnist_GDBack_Compression_Contract_Like_'+fname+'.pkl', 'wb')
+    f = open('./eval_efforts_rough/Constraint_mnist_GDBack_Compression_'+folder+'_'+fname+'.pkl', 'wb')
     pickle.dump(confidence_data, f, protocol=pickle.HIGHEST_PROTOCOL)
     f.close()
 
-def compression():
-    nn = LeNet(cf_type='Solo_Contract_Likelihood')
+def compression(folder,cf,ratio=0.1):
+    '''
+    Compress the network by eliminating small weight parameters
+    :return:
+    '''
+    nn = LeNet(cf_type=cf)
     while nn.connection_count() > 0:
         connection_count = nn.connection_count()
         print('******connection count is %d******' % connection_count)
+        if 'LOGINIT' in folder:
+            nn.init_by_log()
         params,masks,test_score,gradstoPP = nn.train(40)
-        f = open('./Compression/CONTRACT_LIKE/connection_count_'+str(connection_count)+'.pkl', 'wb')
+        f = open('./Compression/'+folder+'/connection_count_'+str(connection_count)+'.pkl', 'wb')
         pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
         f.close()
 
@@ -824,14 +878,18 @@ def compression():
         flatten_params = map(lambda x: abs(x), flatten_params)
         flatten_params.sort()
 
-        if connection_count > 50000:
-            remove_edge_number = 10000
-        elif connection_count > 2000:
-            remove_edge_number = 1000
-        elif connection_count > 150:
-            remove_edge_number = 50
-        else:
+        remove_edge_number = int(connection_count*ratio)
+        if connection_count < 150:
             break
+
+        # if connection_count > 50000:
+        #     remove_edge_number = 10000
+        # elif connection_count > 2000:
+        #     remove_edge_number = 1000
+        # elif connection_count > 150:
+        #     remove_edge_number = 50
+        # else:
+        #     break
 
         thval = flatten_params[remove_edge_number]
         for i in range(len(nn.params)):
@@ -846,99 +904,457 @@ def compression():
             mask_group.resize(group_shape)
             nn.masks[i].set_value(mask_group)
 
-def compression_Prune_Large():
-    '''
-    This function prune large weight first
-    :return:
-    '''
-    nn = LeNet()
-    while nn.connection_count() > 0:
-        connection_count = nn.connection_count()
-        print('******connection count is %d******' % connection_count)
-        params,masks,test_score,gradstoPP = nn.train(80)
-        f = open('./Compression/Prune_Large/connection_count_'+str(connection_count)+'.pkl', 'wb')
-        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
-        f.close()
 
+
+def mix_compression(initial_config, compression_config, cf):
+    nn = LeNet(cf_type=cf)
+
+    # Resume the parameter for original complete network
+    f = open('./Compression/INITIAL/' + initial_config + '.pkl', 'rb')
+    load_value = pickle.load(f)
+    nn.resume_all(load_value[0], load_value[1])
+    f.close()
+    # if 'LOGINIT' in compression_config:
+    #     nn.log_init()
+
+    while nn.connection_count() > 0:
+
+        # Remove Redundant Edges
+        connection_count = nn.connection_count()
         flatten_params = []
         for i in range(len(nn.params)):
-            if i%2 == 1:
-                # We don't prune bias
-                continue
             params_group = numpy.reshape(nn.params[i].get_value(), (-1))
             mask_group = numpy.reshape(nn.masks[i].get_value(), (-1))
-            flatten_params += list(params_group*mask_group)
+            flatten_params += list(params_group * mask_group)
 
         flatten_params = filter(lambda a: a != 0, flatten_params)
         flatten_params = map(lambda x: abs(x), flatten_params)
-        flatten_params.sort(reverse=True)
+        flatten_params.sort()
 
-        if connection_count > 50000:
-            remove_edge_number = 100
-        elif connection_count > 2000:
-            remove_edge_number = 100
-        elif connection_count > 150:
-            remove_edge_number = 5
-        else:
+        remove_edge_number = int(connection_count * 0.1)
+        if connection_count < 20000:
             break
 
         thval = flatten_params[remove_edge_number]
         for i in range(len(nn.params)):
-            if i%2 == 1:
-                # We don't prune bias
-                continue
             params_group = nn.params[i].get_value()
             mask_group = nn.masks[i].get_value()
             group_shape = mask_group.shape
             params_group = numpy.reshape(params_group, (-1))
-            mask_group = numpy.reshape(mask_group,(-1))
+            mask_group = numpy.reshape(mask_group, (-1))
             for ind in range(len(params_group)):
-                if abs(params_group[ind]) > thval:
+                if abs(params_group[ind]) < thval:
                     mask_group[ind] = 0
             mask_group.resize(group_shape)
             nn.masks[i].set_value(mask_group)
 
-def reliability(fault_probability):
+        # Retrain the network
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        if 'LOGINIT' in compression_config:
+            nn.init_by_log()
+        params, masks, test_score, gradstoPP = nn.train(50)
+        f = open('./Compression/' + compression_config + '/connection_count_' + str(connection_count) + '.pkl', 'wb')
+        pickle.dump([params, masks, test_score, gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+
+def layer_by_layer_compression(folder, cf):
+    '''
+    Compress the network by eliminating small weight parameters
+    :return:
+    '''
+    nn = LeNet(cf_type=cf)
+    while nn.connection_count() > 1000:
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        nn.init_by_log()
+        params,masks,test_score,gradstoPP = nn.train(40)
+        f = open('./Compression/' +folder+'/connection_count_'+str(connection_count)+'.pkl', 'wb')
+        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+
+        for i in range(len(nn.params)):
+            params_group = nn.params[i].get_value()
+            group_shape = params_group.shape
+            params_group = numpy.reshape(params_group, (-1))
+            mask_group = numpy.reshape(nn.masks[i].get_value(), (-1))
+            flatten_params = list(params_group*mask_group)
+
+            flatten_params = filter(lambda a: a != 0, flatten_params)
+            flatten_params = map(lambda x: abs(x), flatten_params)
+            flatten_params.sort()
+
+            layer_count = len(flatten_params)
+
+            #Remove 5% weights
+            remove_edge_number = int(layer_count * 0.1)
+
+            thval = flatten_params[remove_edge_number]
+
+            for ind in range(len(params_group)):
+                if abs(params_group[ind]) < thval:
+                    mask_group[ind] = 0
+            mask_group.resize(group_shape)
+            nn.masks[i].set_value(mask_group)
+
+
+def layer_by_layer_contract_compression(folder, cf):
+    '''
+    Compress the network by eliminating small weight parameters
+    :return:
+    '''
+    nn = LeNet(cf_type=cf)
+    while nn.connection_count() > 1000:
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        nn.init_by_log()
+        params,masks,test_score,gradstoPP = nn.train(40)
+        f = open('./Compression/'+folder+'/connection_count_'+str(connection_count)+'.pkl', 'wb')
+        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+        L2xp_batch = nn.L2xp(randint(0,nn.n_valid_batches-1))
+        L2xp_sign = [numpy.sign(x) for x in L2xp_batch]
+
+        for i in range(len(nn.params)):
+            params_group = nn.params[i].get_value()
+            signed_params_group = -1 * (params_group * L2xp_sign[i])
+            mask_group = nn.masks[i].get_value()
+            flatten_params = list(numpy.reshape(signed_params_group * mask_group, (-1)))
+
+            flatten_params = filter(lambda a: a < 0, flatten_params)
+            flatten_params = map(lambda x: abs(x), flatten_params)
+            flatten_params.sort()
+
+            layer_count = len(flatten_params)
+            if layer_count == 0:
+                continue
+            #Remove 5% weights
+            remove_edge_number = int((layer_count-1) * 0.1)
+
+            thval = -1*flatten_params[remove_edge_number]
+            remove_edge_index = numpy.logical_and(signed_params_group < 0, signed_params_group > thval)
+            mask_group[remove_edge_index] = 0
+            nn.masks[i].set_value(mask_group)
+
+
+
+
+def contract_compression():
+    '''
+    Compress the network by removing edges, whose weights are small and absence would decrease the magnitude of derivative. CC for short
+    :return:
+    '''
+    nn = LeNet(cf_type='Contract_Likelihood')
+    while nn.connection_count() > 0:
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        # nn.init_by_log()
+        params,masks,test_score,gradstoPP = nn.train(40)
+        f = open('./Compression/CC_CONTRACT_LIKE/connection_count_'+str(connection_count)+'.pkl', 'wb')
+        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+        L2xp_batch = nn.L2xp(randint(0,nn.n_valid_batches-1))
+        L2xp_sign = [numpy.sign(x) for x in L2xp_batch]
+
+
+        flatten_params = []
+        for i in range(len(nn.params)):
+            #Calcualte contract change direction after removing each edge
+            params_group = -1*numpy.reshape(nn.params[i].get_value()*L2xp_sign[i], (-1))
+            mask_group = numpy.reshape(nn.masks[i].get_value(), (-1))
+            flatten_params += list(params_group*mask_group)
+
+        flatten_params = filter(lambda a: a < 0, flatten_params)
+        flatten_params = map(lambda x: abs(x), flatten_params)
+        flatten_params.sort()
+        effective_connection_count = len(flatten_params)
+
+        # Temporary for checking the tendency of init by log
+        if connection_count < 300000:
+            break
+
+        if connection_count > 50000:
+            remove_edge_number = 10000
+        elif connection_count > 2000:
+            remove_edge_number = 1000
+        elif connection_count > 150:
+            remove_edge_number = 50
+        else:
+            break
+        if remove_edge_number > effective_connection_count:
+            remove_edge_number = effective_connection_count
+
+        thval = -1*flatten_params[remove_edge_number]
+        for i in range(len(nn.params)):
+            params_group = -1 * (nn.params[i].get_value() * L2xp_sign[i])
+            mask_group = nn.masks[i].get_value()
+            remove_edge_index = numpy.logical_and(params_group<0,params_group>thval)
+            mask_group[remove_edge_index] = 0
+            nn.masks[i].set_value(mask_group)
+
+
+def reliability(fault_probability,folder):
+    '''
+    check the reliability of the network under fault injection
+    :param fault_probability:
+    :param folder:
+    :return:
+    '''
     nn = LeNet()
-    files = os.listdir('./Compression/CONTRACT_LIKE_L2EN3/')
+    files = os.listdir('./Compression/'+folder+'/')
     files = filter(lambda x: 'connection_count' in x, files)
     reliability={}
     for fname in files:
         #if int(fname.split("_")[2].split('.')[0]) > 40000:
             #continue
-        f = open('./Compression/CONTRACT_LIKE_L2EN3/'+fname, 'rb')
+        f = open('./Compression/'+folder+'/'+fname, 'rb')
         load_value = pickle.load(f)
         nn.resume_all(load_value[0], load_value[1])
         f.close()
         connection_count = nn.connection_count()
         reliability[connection_count] = []
-        for i in range(50):
+        for i in range(100):
             nn.resume_mask(load_value[1])
-            test_score = nn.inject_fault(fault_probability)
-            reliability[connection_count].append(test_score)
+            test_loss = nn.inject_fault(fault_probability)
+            reliability[connection_count].append(test_loss)
         print(fname)
         print(reliability[connection_count])
-    f = open('./Compression_Result/reliability_contract_'+str(fault_probability)+'.pkl','wb')
+    f = open('./Compression_Result/reliability_'+folder+'_'+str(fault_probability)+'.pkl','wb')
     pickle.dump(reliability, f, protocol=pickle.HIGHEST_PROTOCOL)
     print(reliability)
 
-def eval_adversarial_efforts(filelist):
+
+
+def fixed_compression(mask_folder,target_floder,target_cf):
+    '''
+    Compress the network with fixed mask from other process, FC for sort
+    :param mask_folder:
+    :param target_floder:
+    :param target_cf:
+    :return:
+    '''
+    nn = LeNet(cf_type=target_cf)
+    files = os.listdir('./Compression/' + mask_folder + '/Selected')
+    files = filter(lambda x: 'connection_count' in x, files)
+
+    for fname in files:
+
+        # load the original mask
+        f = open('./Compression/' + mask_folder + '/Selected/' + fname, 'rb')
+        load_value = pickle.load(f)
+        f.close()
+
+        # Initialize the network with specific mask
+        nn.init_by_log()
+        nn.resume_mask(load_value[1])
+
+        # Train the network and store the result
+        params,masks,test_score,gradstoPP = nn.train(40)
+        f = open('./Compression/'+target_floder+'/Selected/'+fname, 'wb')
+        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+
+def pure_contract_compression(folder,cf,ration=0.05):
+    '''
+    Compress the network by removing edges, whose weights' absence would decrease the magnitude of derivative. PCC for short
+    :return:
+    '''
+    nn = LeNet(cf_type=cf)
+    while nn.connection_count() > 0:
+        connection_count = nn.connection_count()
+        print('******connection count is %d******' % connection_count)
+        nn.init_by_log()
+        params,masks,test_score,gradstoPP = nn.train(40)
+        f = open('./Compression/'+ folder +'/connection_count_'+str(connection_count)+'.pkl', 'wb')
+        pickle.dump([params,masks,test_score,gradstoPP], f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+        L2xp_batch = nn.L2xp(randint(0,nn.n_valid_batches-1))
+        # L2xp_sign = [numpy.sign(x) for x in L2xp_batch]
+
+
+        flatten_params = []
+        for i in range(len(nn.params)):
+            #Calcualte contract change direction after removing each edge
+            params_group = -1*numpy.reshape(nn.params[i].get_value()*L2xp_batch[i], (-1))
+            mask_group = numpy.reshape(nn.masks[i].get_value(), (-1))
+            flatten_params += list(params_group*mask_group)
+
+        flatten_params = filter(lambda a: a < 0, flatten_params)
+        # flatten_params = map(lambda x: abs(x), flatten_params)
+        flatten_params.sort()
+        effective_connection_count = len(flatten_params)
+
+        remove_edge_number = int(connection_count * 0.05)
+        if connection_count < 500:
+            break
+        # if connection_count > 50000:
+        #     remove_edge_number = 10000
+        # elif connection_count > 2000:
+        #     remove_edge_number = 1000
+        # elif connection_count > 150:
+        #     remove_edge_number = 50
+        # else:
+        #     break
+        if remove_edge_number > effective_connection_count:
+            remove_edge_number = effective_connection_count
+
+        thval = flatten_params[remove_edge_number]
+        for i in range(len(nn.params)):
+            params_group = -1 * nn.params[i].get_value() * L2xp_batch[i]
+            mask_group = nn.masks[i].get_value()
+            remove_edge_index = numpy.logical_and(params_group<0,params_group<thval)
+            mask_group[remove_edge_index] = 0
+            nn.masks[i].set_value(mask_group)
+
+def eval_accuracy(folder):
+    nn = LeNet()
+    files = os.listdir('./Compression/'+folder+'/Selected')
+    files = filter(lambda x: 'connection_count' in x, files)
+    reliability={}
+    for fname in files:
+        f = open('./Compression/'+folder+'/Selected/'+fname, 'rb')
+        load_value = pickle.load(f)
+        nn.resume_all(load_value[0], load_value[1])
+        f.close()
+        connection_count = nn.connection_count()
+        reliability[connection_count] = []
+        test_loss = nn.get_accuracy()
+        reliability[connection_count].append(test_loss)
+    f = open('./Compression_Result/reliability_'+folder+'_'+str(0)+'.pkl','wb')
+    pickle.dump(reliability, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(reliability)
+
+def eval_adversarial_efforts(filelist,folder):
     nn = LeNet(batch_size=1)
     for fname in filelist:
-        f = open('./Compression/CONTRACT_LIKE_L2EN3/Selected/'+fname, 'rb')
+        f = open('./Compression/'+folder+'/Selected/'+fname, 'rb')
         load_value = pickle.load(f)
         nn.resume_all(load_value[0], load_value[1])
         f.close()
         connection_count = nn.connection_count()
         grads,proby = nn.get_grad_and_proby_func()
-        dump_mnist(str(connection_count),grads,proby)
+        dump_mnist(str(connection_count),grads,proby,folder)
+
+
+
+def checklinearty(ori_img, gradsvalue,lfunc, count = 2000, maxdelta = 10):
+    upper_bound_img = numpy.ones((784,))
+    lower_bound_img = numpy.zeros((784,))
+
+    deltarange = numpy.linspace(-1. * maxdelta, maxdelta, count)
+    negrange = deltarange[0:count / 2]
+    posrange = deltarange[count / 2:-1]
+
+    narray = numpy.zeros([len(negrange), 10])
+    lastimg = numpy.ones((784,))
+    nimg = numpy.zeros([len(negrange), 784])
+    for dind in range(len(negrange) - 1, 0, -1):
+        delta = negrange[dind]
+        timg = ori_img[0] + delta * gradsvalue
+        timg = numpy.maximum(lower_bound_img, numpy.minimum(timg, upper_bound_img))
+        effecitve_n = dind
+        if numpy.array_equal(timg, lastimg):
+            break
+        lastimg = timg
+        logits = lfunc([timg])
+        narray[dind, :] = logits.reshape(1, 10)
+        nimg[dind,:] = timg.reshape(1,784)
+    narray = narray[effecitve_n + 1:-1, :]
+    negrange = negrange[effecitve_n + 1:-1]
+
+    parray = numpy.zeros([len(posrange), 10])
+    lastimg = numpy.ones((784,))
+    pimg = numpy.zeros([len(posrange),784])
+    for dind in range(len(posrange)):
+        delta = posrange[dind]
+        timg = ori_img[0] + delta * gradsvalue
+        timg = numpy.maximum(lower_bound_img, numpy.minimum(timg, upper_bound_img))
+        effecitve_n = dind
+        if dind != 0:
+            if numpy.array_equal(timg, lastimg):
+                break
+        lastimg = timg
+        logits = lfunc([timg])
+        parray[dind, :] = logits.reshape(1, 10)
+        pimg[dind,:] = timg.reshape(1,784)
+    parray = parray[0:effecitve_n, :]
+
+    posrange = posrange[0:effecitve_n]
+    logisarray = numpy.concatenate((narray, parray))
+    deltarange = numpy.concatenate((negrange, posrange))
+    return (logisarray,deltarange)
+
+def plotlinearty(logisarray,deltarange,correcttarget,fname,adone = -1,mag_of_grad=1):
+    ax = plt.subplot(111)
+    plt.ylim(-0.1, 1.1)
+    plt.xlim(-5,5)
+    colors = cm.rainbow(numpy.linspace(0, 1, 10))
+    for ty in range(5):
+        if ty == correcttarget:
+            ax.plot(deltarange, logisarray[:, ty], label='correct_' + str(ty), linestyle='--', color=colors[ty])
+        elif adone != -1 and ty == adone:
+            ax.plot(deltarange, logisarray[:, ty], label='ad_' + str(ty), linestyle='-.', color=colors[ty])
+        else:
+            ax.plot(deltarange, logisarray[:, ty], label=str(ty),  color=colors[ty])
+    ax.axvline(0, color='b', linestyle='--')
+    ax.axvline(2, color='r', linestyle='--')
+    # ax.axvline(mag_of_grad, color='r', linestyle='--')
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+    # Put a legend to the right of the current axis
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(fname)
+    plt.close()
+
+
+def draw_vicinity_ad_direction(model):
+
+    nn = LeNet(batch_size=1)
+    files = os.listdir('./Compression/' + model + '/Selected/')
+
+    for fname in files:
+        f = open('./Compression/'+model+'/Selected/'+fname, 'rb')
+        load_value = pickle.load(f)
+        nn.resume_all(load_value[0], load_value[1])
+        f.close()
+        proby = nn.get_all_proby_func()
+
+
+        data_file = './eval_efforts_rough/Constraint_mnist_GDBack_Compression_'+ model+'_'+ fname.split('_')[-1]
+        if os.path.exists(data_file):
+            dataf = open(data_file, 'rb')
+            result = pickle.load(dataf)
+        else:
+            continue
+
+        for i in range(5):
+            ori_img = [numpy.asarray(result[i][1][0], dtype=theano.config.floatX)]
+            gradsvalue = numpy.asarray(result[i][1][1][0], dtype=theano.config.floatX) - ori_img[0]
+            gradsvalue = gradsvalue.reshape(784,)
+            mag_of_grad = numpy.linalg.norm(gradsvalue)
+
+            logisarray,deltarange = checklinearty(ori_img,gradsvalue,proby,maxdelta=10)
+            plotlinearty(logisarray, deltarange*mag_of_grad, result[i][0][0], "./vicinity/" + str(i) + '_' + model+'_'+fname.split('_')[-1] + ".pdf",result[i][0][1],mag_of_grad)
 
 if __name__ == '__main__':
+
     theano.sandbox.cuda.use("gpu"+sys.argv[1])
-    #files = os.listdir('./Compression/CONTRACT_LIKE_L2EN3/Selected/')
-    #files = files[int(sys.argv[2]):int(sys.argv[3])]
-    # eval_adversarial_efforts(files)
-    # reliability(0)
-    compression()
-    # nn = LeNet(cf_type='Contract_Likelihood')
-    # theano.printing.pydotprint(nn.train_model,outfile="pics/pydotprint_train_model_contract_likelihood.png", var_with_name_simple=True)
+    for folder in [['NO_REGULAR','no_regular'], ['CONTRACT_LIKE','Contract_Likelihood'], ['L2EN3','L2'], ['LOGINIT_CONTRACT_LIKE','Contract_Likelihood'],['LOGINIT_L2EN3','L2'],['LOGINIT_NO_REGULAR','no_regular']]:
+        os.mkdir('./Compression/'+folder[0])
+        compression(folder[0],folder[1])
+        files = os.listdir('./Compression/'+folder+'/')
+    #   files = files[int(sys.argv[2]):int(sys.argv[3])]
+        eval_adversarial_efforts(files,folder)
+        eval_accuracy(folder)
+
+    # mix_compression(initial_config=sys.argv[2],compression_config=sys.argv[3],cf=sys.argv[4])
+    # pure_contract_compression('PCC_LOGINIT_NO_REGULAR',cf='no_regular')
+    # layer_by_layer_contract_compression('LBL_CC_LOGINIT_NO_REGULAR', cf='no_regular')
+    # fixed_compression(mask_folder='L2EN3',target_floder='FC_LOGINIT_NO_REGULAR',target_cf='no_regular')
