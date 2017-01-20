@@ -3,18 +3,8 @@ import matplotlib.pyplot as plt
 import os
 import matplotlib.cm as cm
 from statistic import get_accuracy_vs_NNsize
-#Load the datasets
-# f = gzip.open('mnist.pkl.gz', 'rb')
-# train_set, valid_set, test_set = cPickle.load(f)
-# f.close()
-#
-# train_x = numpy.asarray(train_set[0])
-# train_y = numpy.asarray(train_set[1])
-#
-# first_image = numpy.reshape(train_x[0], (28, 28))
-# print train_y
-# plt.imshow(first_image,cmap='Greys_r')
-# plt.show()
+from statistic import get_contractiveterm_vs_NNsize
+from statistic import get_accuracy_vs_NNsize_dict
 
 import six.moves.cPickle as pickle
 
@@ -53,6 +43,37 @@ def draw_scratch():
         axes[2].set_title('Original: score ' + str(probyvalue_ori))
 
         plt.savefig(data_dir+pkl+'.png')
+        plt.close()
+
+
+def draw_rgb_image(pkfile,savefolder):
+    os.mkdir(savefolder)
+    f = open(pkfile, 'rb')
+    result_list = pickle.load(f)
+    f.close()
+
+    for i in range(len(result_list)):
+        result = result_list[i]
+        fig, axes = plt.subplots(nrows=1, ncols=3)
+
+
+        ad_img = numpy.transpose(numpy.reshape(result[1][1][0],(3,32,32)),(1,2,0))/255
+        or_img = numpy.transpose(numpy.reshape(result[1][0],(3,32,32)),(1,2,0))/255
+        # dist_img = ad_img - or_img
+
+        # Original Image
+        axes[0].imshow(or_img)
+        axes[0].set_title('Original class ' + ':' + str(result[0][0]))
+
+        # Difference
+        axes[1].imshow(ad_img-or_img)
+        axes[1].set_title('Difference ')
+
+        # Ad Image
+        axes[2].imshow(ad_img)
+        axes[2].set_title('Ad class ' + ':' + str(result[0][2])+'('+str(result[0][1])+')')
+
+        plt.savefig(savefolder+str(i)+'.pdf')
         plt.close()
 
 
@@ -210,26 +231,25 @@ def distortion_L2(data_file):
     dataf = open(data_file,'rb')
     result = pickle.load(dataf)
 
+    if len(result)==0:
+        return [0,0]
+
     distortion = []
-    effemask = []
 
     effcount = 0
     for i in result:
         tmp_norm = numpy.linalg.norm(i[1][0]-i[1][1][0])
-        distortion.append(tmp_norm)
-        if len(i[0]) == 3:
-            if numpy.isnan(numpy.sum(i[1][1][0])) or i[0][2] != i[0][1]:
-                effemask.append(0)
-                distortion[-1] = -1
+        if len(i[0]) == 4:
+            if i[0][2] != i[0][1] or i[0][0] != i[0][3]:
                 continue
-        effemask.append(1)
+        distortion.append(tmp_norm)
         effcount += 1
     effratio = (effcount * 1.)/len(result)
 
     tmp = numpy.asarray(distortion)
     mtmp = numpy.mean(tmp)
 
-    return [mtmp,effratio,distortion,effemask]
+    return [mtmp,effratio]
 
 
 def check_output_range(data_file, evalbase='target'):
@@ -320,28 +340,21 @@ def draw_distortion_direction(data_file):
         plt.close()
 
 def Cifar():
-    fig, (ax0, ax1) = plt.subplots(nrows=2, sharex=True)
+    fig, (ax0, ax1, ax2, ax3) = plt.subplots(nrows=4, sharex=True)
 
     folders = [
-        'NO_REGULAR',
-        # 'CONTRACT_LIKE',
-        # 'CONTRACT_LIKE_L2EN3',
-        'L2',
-        'LOGINIT_L2',
-        # 'L2_RATIO'
-        # 'CC_NO_REGULAR',
-        # 'CC_LOGINIT_NO_REGULAR',
-        # 'LOGINIT_CONTRACT_LIKE',
-        # 'FC_LOGINIT_CONTRACT_LIKE',
-        # 'CC_CONTRACT_LIKE'
-        # 'PCC_LOGINIT_NO_REGULAR',
-        # 'FC_LOGINIT_NO_REGULAR_40',
-        'LOGINIT_NO_REGULAR'
+        'A_NO_REGULAR',
+        'B_NO_REGULAR',
+        # 'A_LOGINIT_NO_REGULAR',
+        # 'B_LOGINIT_NO_REGULAR',
+
     ]
 
     global_mask_exist = False
     global_distortion = []
     global_x =[]
+
+    #Recheck these
     for folder in folders:
         files = os.listdir('./CifarNet/eval_efforts_rough/')
         files = filter(lambda a: "Constraint_mnist_GDBack_Compression_" + folder == '_'.join(a.split('_')[:-1]), files)
@@ -352,9 +365,6 @@ def Cifar():
         y1 = []
         y2 = []
 
-        # Only compare the same sample
-        dist_matrix = []
-        dist_mask = []
 
         for model in models:
             print(folder + model)
@@ -363,67 +373,106 @@ def Cifar():
                 result = distortion_L2('./CifarNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_' + folder + model)
                 y1.append(result[0])
                 y2.append(result[1])
-                dist_matrix.append(result[2])
-                dist_mask.append(result[3])
             else:
                 print(folder + model + 'not_found')
 
-        global_distortion.append(dist_matrix)
-        global_x.append(x)
-
-        if not global_mask_exist:
-            dist_mask = numpy.asarray(dist_mask)
-            global_mask = numpy.prod(dist_mask,axis=0)
-            global_mask_exist = True
-        else:
-            dist_mask = numpy.asarray(dist_mask)
-            tmp_mask = numpy.prod(dist_mask,axis=0)
-            global_mask *= tmp_mask
-
-    # remove uncommon sample
-    for i in range(len(folders)):
-        folder = folders[i]
-        dist_matrix = numpy.asarray(global_distortion[i])
-        effective_samples = numpy.sum(global_mask)
-        mask_expand = global_mask.reshape((1,global_mask.shape[0])).repeat(dist_matrix.shape[0],0)
-        dist_matrix *= mask_expand
-        dist_matrix = numpy.sum(dist_matrix,axis=1)/effective_samples
-        y1 = list(numpy.squeeze(dist_matrix.reshape(1,-1)))
-        x = global_x[i]
-
         x_sort, y1 = zip(*(sorted(zip(x, y1))))
         ax0.plot(x_sort, y1, label=folder)
+        ax0.set_title('distortion')
+
+        x_sort, y2 = zip(*(sorted(zip(x, y2))))
+        ax1.plot(x_sort, y2, label=folder)
+        ax1.set_title('success rate')
+
+        x, y = get_contractiveterm_vs_NNsize('CifarNet', folder)
+        ax2.plot(x, y, label=folder)
+        ax2.set_title("Lx2p norm")
 
         x, y = get_accuracy_vs_NNsize('CifarNet',folder)
-        ax1.plot(x, y, label=folder)
+        ax3.plot(x, y, label=folder)
+        ax3.set_title("Accuracy")
+
+
     # ax1.set_ylim([0.9, 1])
     # plt.hlines(0,0,431080)
     plt.legend(loc=0)
     plt.gca().invert_xaxis()
     plt.show()
-    exit()
+    # exit()
 
 def LeNet():
-
-    fig, (ax0,ax1) = plt.subplots(nrows=2,sharex=True)
+    colors = ('b', 'g', 'r', 'c', 'm', 'y', 'k')
+    index = 0
+    fig, (ax0,ax1,ax2) = plt.subplots(nrows=3,sharex=True)
     for folder in [
+
+                    # 'OBD_L2',
+                    # 'OBD_LOGINIT_L2',
+                    # 'OBD_LOGINIT_NO_REGULAR',
+
                     'NO_REGULAR',
-                   # 'LOGINIT_NO_REGULAR_0.05',
-                   'LOGINIT_NO_REGULAR',
-                   #  'LOGINIT_NO_REGULAR_0.15'
-                    'CONTRACT_LIKE',
-                    # 'CONTRACT_LIKE_L2EN3',
-                    'L2EN3',
-                    'LOGINIT_L2EN3',
+                    'LOGINIT_NO_REGULAR',
+                    # 'FC_LOGINIT_NO_REGULAR_NOREGULARMASK',
+                    # 'LOGINIT_NO_REGULAR_KEEPBIAS',
+                    # 'NO_REGULAR_RANDOMINIT1',
+                    # 'NO_REGULAR_DROPOUT_0.2',
+                    # 'NO_REGULAR_DROPOUT_0.5',
+                    # 'NO_REGULAR_DROPOUT_0.9',
+                    'NO_REGULAR_RANDOM1',
+                    'NO_REGULAR_RANDOM2',
+                    'NO_REGULAR_RANDOM3',
+                    'NO_REGULAR_RANDOM4',
+                    'RANDOM_LOGINIT_NO_REGULAR_1',
+                    'RANDOM_LOGINIT_NO_REGULAR_2',
+                    'RANDOM_LOGINIT_NO_REGULAR_3',
+                    # 'LOGINIT_NO_REGULAR_RANDOMINIT1',
+                    # 'CC_LOGINIT_NO_REGULAR',
+                    # 'CC_NO_REGULAR',
+                    # 'CCV3_NO_REGULAR',
+                    # 'CCV3_0.05_NO_REGULAR'
+                    # 'CCV3_LOGINIT_NO_REGULAR',
+                    # 'CCV2_LBL_LOGINIT_NO_REGULAR',
+                    # 'CCV2_LBL_LOGINIT_NO_REGULAR'
+                    # 'L2EN3',
+                    # 'LOGINIT_L2EN3',
+                    # 'LOGINIT_L2_KEEPBIAS',
+                    # 'CCV3_L2',
+                    # 'CCV3_LOGINIT_L2',
+                    # 'CONTRACT_LIKE',
+                    # 'LOGINIT_CONTRACT_LIKE',
+                    # 'LOGINIT_CONTRACT_LIKE_KEEPBIAS',
+                    # 'CCV3_CONTRACT_LIKE',
+                    # 'CCV3_LOGINIT_CONTRACT_LIKE',
+                    # 'FC_LOGINIT_CONTRACT_LIKE_L2MASK',
+                    # 'FC_LOGINIT_NO_REGULAR_L2MASK',
+                    # 'FC_LOGINIT_NO_REGULAR_INITL2MASK',
+                    # 'FC_LOGINIT_L2_INITCONTRACTLIKEMASK',
+                    # 'FC_LOGINIT_NO_REGULAR_INITCONTRACTLIKEMASK',
+                    # 'FC_LOGINIT_L2_INITNOREGULARMASK',
+                    # 'FC_LOGINIT_CONTRACT_LIKE_INITNOREGULARMASK',
+                    # 'FC_LOGINIT_CONTRACT_LIKE_INITL2MASK',
+                    # 'FC_LOGINIT_CONTRACT_LIKE_L2MASK',
+                    # 'CCV2_LBL_LOGINIT_NO_REGULAR',
+
+                    # 'SWCC_LOGINIT_NO_REGULAR',
+                    # 'LOGINIT_NO_REGULAR_0.05',
+                    #  'LOGINIT_NO_REGULAR_0.15'
+                    #  'CONTRACT_LIKE',
+                    # 'CONTRACT_LIKE_L2',
+                    # 'LOGINIT_L2EN3',
+                    # 'L1',
+                    # 'LOGINIT_L1',
+
                     # 'CC_NO_REGULAR',
                     # 'CC_LOGINIT_NO_REGULAR',
-                    'LOGINIT_CONTRACT_LIKE',
+                    # 'LOGINIT_CONTRACT_LIKE_L2',
+                    # 'FC_LOGINIT_CONTRACT_LIKE_L2_L2MASK',
+                    # 'FC_CONTRACT_LIKE_L2MASK',
                     # 'FC_LOGINIT_CONTRACT_LIKE',
                     # 'CC_CONTRACT_LIKE'
                     # 'LBL_LOGINIT_NO_REGULAR',
                     # 'PCC_LOGINIT_NO_REGULAR',
                     # 'FC_LOGINIT_NO_REGULAR_40',
-                    # 'LOGINIT_NO_REGULAR',
                     # 'MIX_LOGINIT_L2_NO_REGULAR',
                     # 'MIX_LOGINIT_NO_REGULAR_L2'
                     ]:
@@ -432,6 +481,8 @@ def LeNet():
         models = map(lambda a: a.replace("Constraint_mnist_GDBack_Compression_"+folder,""), files)
         x = []
         y = []
+
+
 
         for model in models:
             print(folder+model)
@@ -442,16 +493,89 @@ def LeNet():
                 print(folder+model+'not_found')
 
         # y = map(lambda a: a - y[-1],y)
-        x,y = zip(*(sorted(zip(x,y))))
-        ax0.plot(x,y,label=folder)
-        x,y = get_accuracy_vs_NNsize('LeNet',folder)
-        ax1.plot(x,y,label=folder)
-    ax1.set_ylim([0.9,1])
-    # plt.hlines(0,0,431080)
+        x0,y0 = zip(*(sorted(zip(x,y))))
+        ax0.plot(x0,y0,label=folder)
+        x2,y2 = get_accuracy_vs_NNsize('LeNet',folder)
+        ax2.plot(x2,y2,label=folder)
+        # x1,y1 = get_contractiveterm_vs_NNsize('LeNet',folder)
+        # ax1.plot(x1,y1,label=folder)
+    # ax2.set_ylim([0.9,1])
+    #     y1_diff = [y1[i]-y1[i-1] for i in range(1,len(y1))]
+    #     y0_diff = [y0[i] - y0[i - 1] for i in range(1, len(y0))]
+    #     plt.plot(y1,y0,colors[index]+'x',label=folder,)
+        index += 1
     plt.legend(loc=0)
     plt.gca().invert_xaxis()
     plt.show()
     exit()
+
+def test_random():
+    colors = ('b', 'g', 'r', 'c', 'm', 'y', 'k')
+    index = 0
+    fig, (ax0, ax1, ax2) = plt.subplots(nrows=3, sharex=True)
+
+    #draw the baseline
+    folder = 'NO_REGULAR'
+    files = os.listdir('./LeNet/eval_efforts_rough/')
+    files = filter(lambda a: "Constraint_mnist_GDBack_Compression_" + folder == '_'.join(a.split('_')[:-1]), files)
+    models = map(lambda a: a.replace("Constraint_mnist_GDBack_Compression_" + folder, ""), files)
+    x = []
+    y = []
+
+    for model in models:
+        print(folder + model)
+        if os.path.exists('./LeNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_' + folder + model):
+            x.append(float(model.split('_')[-1].split('.pkl')[0]))
+            y.append(
+                distortion_L2('./LeNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_' + folder + model)[
+                    0])
+        else:
+            print(folder + model + 'not_found')
+
+    # y = map(lambda a: a - y[-1],y)
+    x0, y0 = zip(*(sorted(zip(x, y))))
+    ax0.plot(x0, y0, label=folder)
+    x2, y2 = get_accuracy_vs_NNsize('LeNet', folder)
+    ax2.plot(x2, y2, label=folder)
+
+    fig2, axs_list = plt.subplots(ncols=7)
+    #draw random sample
+    for i in range(2,10):
+        files = os.listdir('./LeNet/eval_efforts_rough')
+        files = filter(lambda a: 'TEST_RANDOM_MASK_'+str(i)+'_' in a, files)
+
+        random_mask = {}
+        max_x = -1
+        for model in files:
+            print(model)
+            x= int(model.split('_')[-1].split('.0.pkl')[0])
+            y= distortion_L2('./LeNet/eval_efforts_rough/' + model)[0]
+            random_mask[x] = y
+            if x >= max_x:
+                max_x = x
+
+        accuracy_dict = get_accuracy_vs_NNsize_dict('LeNet', 'TEST_RANDOM_MASK_'+str(i))
+
+        for k,v in random_mask.items():
+            if k == max_x:
+                continue
+            ax0.plot([max_x,k], [random_mask[max_x],v], label=folder, linestyle=':')
+
+        for k,v in accuracy_dict.items():
+
+            if k == max_x:
+                continue
+            ax2.plot([max_x,k], [accuracy_dict[max_x],v], label=folder, linestyle=':')
+            axs_list[i-3].plot([accuracy_dict[k]],[random_mask[k]],'r+')
+    # x1,y1 = get_contractiveterm_vs_NNsize('LeNet',folder)
+    # ax1.plot(x1,y1,label=folder)
+    # ax2.set_ylim([0.9,1])
+    #     y1_diff = [y1[i]-y1[i-1] for i in range(1,len(y1))]
+    #     y0_diff = [y0[i] - y0[i - 1] for i in range(1, len(y0))]
+    #     plt.plot(y1,y0,colors[index]+'x',label=folder,)
+    # plt.legend(loc=0)
+    fig.gca().invert_xaxis()
+    plt.show()
 
 if __name__ == '__main__':
 
@@ -520,3 +644,7 @@ if __name__ == '__main__':
 
     # Cifar()
     LeNet()
+    # test_random()
+
+    # draw_rgb_image('./CifarNet/eval_efforts_rough/Constraint_mnist_GDBack_Compression_NIN_NO_REGULAR_KEEPBIAS_954730.0.pkl',
+    #                './CifarNet/eval_efforts_rough_img/Constraint_mnist_GDBack_Compression_NIN_NO_REGULAR_KEEPBIAS_954730/')

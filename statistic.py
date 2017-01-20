@@ -1,10 +1,10 @@
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import cPickle
 import numpy
 import os
 import theano
 import numpy
-import seaborn as sns
+# import seaborn as sns
 
 
 import matplotlib
@@ -26,26 +26,23 @@ def draw_weight_distribution(folder):
     files = filter(lambda a: a > 1000,files)
     colors = cm.rainbow(numpy.linspace(0, 1, len(files)+1))
 
-    for i in [0,2,4,6]:
-        plt.figure()
-        count = 0
-        for fname in files:
-            f = open(folder+'/connection_count_' + str(fname)+'.0.pkl', 'rb')
-            load_value = cPickle.load(f)
-            f.close()
+    for fname in files:
+        f = open(folder+'/connection_count_' + str(fname)+'.0.pkl', 'rb')
+        load_value = cPickle.load(f)
+        f.close()
 
-            # for i in range(8):
-            if True:
-                weight = load_value[0][i].get_value()
-                mask = load_value[1][i].get_value()
-                treal_weight = weight * mask
-                real_weight = list(numpy.reshape(treal_weight,(-1)))
-                real_weight = filter(lambda a: a != 0, real_weight)
-                print('%d,%d'%(fname,len(real_weight)))
-            sns.distplot(real_weight, kde=True, hist=False, label=str(fname), kde_kws={"color": colors[count]})
-            count += 1
-        plt.legend(loc='top left')
-        plt.savefig(folder+'/layer_'+str(3-i/2)+'.png')
+        plt.figure()
+        for i in [0, 2, 4, 6]:
+            weight = list(numpy.reshpae(load_value[0][i].get_value(),(-1)))
+            mask = list(numpy.reshpae(load_value[1][i].get_value(),(-1)))
+            wm_list = zip(weight,mask)
+            wm_list = filter(lambda x: x[1] != 0, wm_list)
+            real_weight = zip(*wm_list)[0]
+            print('%d,%d'%(fname,len(real_weight)))
+            sns.distplot(real_weight, kde=True, hist=False, label=str(3-i/2))
+
+        plt.legend(loc='top right')
+        plt.savefig(folder+'/connection_count_' + str(fname)+'.pdf')
 
 
 ########
@@ -60,6 +57,37 @@ def get_accuracy_vs_NNsize(net,folder=''):
     for k, v in result.items():
         x.append(k)
         y.append(1 - numpy.mean(v))
+    xy = zip(x, y)
+    xysort = sorted(xy, key=lambda it: it[0], reverse=True)
+    x = map(lambda it: it[0], xysort)
+    y = map(lambda it: it[1], xysort)
+
+    return [x,y]
+
+########
+# Get Accuracy VS NN Size Under Fault
+########
+def get_accuracy_vs_NNsize_dict(net,folder=''):
+    f = open("./"+net+"/Compression_Result/reliability_"+folder+'_'+str(0)+'.pkl','rb')
+    result = cPickle.load(f)
+    f.close()
+    accuracy_dict = {}
+    for k, v in result.items():
+        accuracy_dict[k] = 1 - numpy.mean(v)
+    return accuracy_dict
+
+########
+# Get Contractive Term VS NN Size Under Fault
+########
+def get_contractiveterm_vs_NNsize(net,folder=''):
+    f = open("./"+net+"/Compression_Result/contractive_term_"+folder+'.pkl','rb')
+    result = cPickle.load(f)
+    f.close()
+    x = []
+    y = []
+    for k, v in result.items():
+        x.append(k)
+        y.append(-1*numpy.mean(v))
     xy = zip(x, y)
     xysort = sorted(xy, key=lambda it: it[0], reverse=True)
     x = map(lambda it: it[0], xysort)
@@ -110,7 +138,7 @@ def draw_accuracy_vs_NNsize():
     # plt.xlim(left=20000)
     # plt.show()
 
-def draw_wegith_pruning_for_each_layer(folder,layer):
+def draw_wegith_pruning_for_each_layer(folder,layer=[0,2,4,6]):
     '''
     This function plots how weights and biases are pruned for each layer during compression.
     :return:
@@ -127,19 +155,19 @@ def draw_wegith_pruning_for_each_layer(folder,layer):
         load_value = cPickle.load(f)
         f.close()
 
-        for i in [layer]:
+        for i in layer:
             layer_mask = load_value[1][i].get_value()
             layer_mask = numpy.reshape(layer_mask,(-1))
             effective_item = layer_mask.sum()
             total_item = layer_mask.shape[0]
             ratio = (effective_item*1.)/total_item
             maskratio[i].append(ratio)
-    for i in [layer]:
+    for i in layer:
         plt.plot(files,maskratio[i],color=colors[i],label='layer_'+str(3-i/2)+'_'+str(i%2))
         # plt.text(files[i*3+10],maskratio[i][i*3+10],'layer_'+str(3-i/2)+'_'+str(i%2))
-    # plt.gca().invert_xaxis()
-    # plt.legend(loc='upper left')
-    # plt.show()
+    plt.gca().invert_xaxis()
+    plt.legend(loc='lower left')
+    plt.savefig(folder + '/each_layer.pdf')
 
 def draw_weight_grads_distribution():
     '''
@@ -209,18 +237,19 @@ def LeNet_Time_Channel(config):
 if __name__=='__main__':
     # draw_wegith_pruning_for_each_layer()
     # draw_accuracy_vs_NNsize()
-    # draw_weight_distribution('./LeNet/Compression/LOGINIT_NO_REGULAR/Selected')
-    # draw_wegith_pruning_for_each_layer('./LeNet/Compression/NO_REGULAR/Selected')
-    layer = 0
-    for folder in [
-        'NO_REGULAR',
+    draw_weight_distribution('./LeNet/Compression/LOGINIT_NO_REGULAR/')
+
+    # draw_wegith_pruning_for_each_layer('./LeNet/Compression/LOGINIT_NO_REGULAR')
+    # layer = 0
+    # for folder in [
+        # 'NO_REGULAR',
         # 'LOGINIT_NO_REGULAR_0.05',
-        'LOGINIT_NO_REGULAR_0.1',
+        # 'LOGINIT_NO_REGULAR_0.1',
         #  'LOGINIT_NO_REGULAR_0.15'
         # 'CONTRACT_LIKE',
         # 'CONTRACT_LIKE_L2EN3',
-        'L2EN3',
-        'LOGINIT_L2EN3',
+        # 'L2EN3',
+        # 'LOGINIT_L2EN3',
         # 'CC_NO_REGULAR',
         # 'CC_LOGINIT_NO_REGULAR',
         # 'LOGINIT_CONTRACT_LIKE',
@@ -232,9 +261,9 @@ if __name__=='__main__':
         # 'LOGINIT_NO_REGULAR',
         # 'MIX_LOGINIT_L2_NO_REGULAR',
         # 'MIX_LOGINIT_NO_REGULAR_L2'
-                   ]:
-        draw_wegith_pruning_for_each_layer('./LeNet/Compression/'+folder+'/Selected',layer)
+        #            ]:
+        # draw_wegith_pruning_for_each_layer('./LeNet/Compression/'+folder+'/Selected',layer)
 
-    plt.gca().invert_xaxis()
-    plt.legend(loc='upper left')
-    plt.savefig(str(layer)+'.pdf')
+    # plt.gca().invert_xaxis()
+    # plt.legend(loc='upper left')
+    # plt.savefig(str(layer)+'.pdf')
