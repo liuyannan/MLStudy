@@ -65,6 +65,29 @@ def get_accuracy_vs_NNsize(net,folder=''):
     return [x,y]
 
 ########
+# get class-wise accuracy VS NN Size
+########
+def get_class_wise_accuracy_vs_NNsize(net,folder=''):
+    f = open("./"+net+"/Compression_Result/accuracy_classwise_"+folder+'.pkl','rb')
+    result = cPickle.load(f)
+    f.close()
+    x = []
+    y = []
+    for k, v in result.items():
+        x.append(k)
+        tmp_y = []
+        for i in range(len(v)):
+            total_sum = len(v[i])
+            tmp_y.append(numpy.sum(numpy.asarray(v[i]))*1./total_sum)
+        y.append(tmp_y)
+    xy = zip(x, y)
+    xysort = sorted(xy, key=lambda it: it[0], reverse=True)
+    x = map(lambda it: it[0], xysort)
+    y = map(lambda it: it[1], xysort)
+    return [x,y]
+
+
+########
 # Get Accuracy VS NN Size Under Fault
 ########
 def get_accuracy_vs_NNsize_dict(net,folder=''):

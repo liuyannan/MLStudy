@@ -5,6 +5,7 @@ import matplotlib.cm as cm
 from statistic import get_accuracy_vs_NNsize
 from statistic import get_contractiveterm_vs_NNsize
 from statistic import get_accuracy_vs_NNsize_dict
+from statistic import get_class_wise_accuracy_vs_NNsize
 
 import six.moves.cPickle as pickle
 
@@ -410,8 +411,8 @@ def LeNet():
                     # 'OBD_LOGINIT_L2',
                     # 'OBD_LOGINIT_NO_REGULAR',
 
-                    'NO_REGULAR',
-                    'LOGINIT_NO_REGULAR',
+                    # 'NO_REGULAR',
+                    # 'LOGINIT_NO_REGULAR',
                     # 'FC_LOGINIT_NO_REGULAR_NOREGULARMASK',
                     # 'LOGINIT_NO_REGULAR_KEEPBIAS',
                     # 'NO_REGULAR_RANDOMINIT1',
@@ -419,12 +420,18 @@ def LeNet():
                     # 'NO_REGULAR_DROPOUT_0.5',
                     # 'NO_REGULAR_DROPOUT_0.9',
                     'NO_REGULAR_RANDOM1',
-                    'NO_REGULAR_RANDOM2',
-                    'NO_REGULAR_RANDOM3',
-                    'NO_REGULAR_RANDOM4',
-                    'RANDOM_LOGINIT_NO_REGULAR_1',
-                    'RANDOM_LOGINIT_NO_REGULAR_2',
-                    'RANDOM_LOGINIT_NO_REGULAR_3',
+                    # 'NO_REGULAR_RANDOM2',
+                    # 'NO_REGULAR_RANDOM3',
+                    # 'NO_REGULAR_RANDOM4',
+                    # 'RANDOM_NO_REGULAR_INITA_1',
+                    # 'RANDOM_NO_REGULAR_INITA_2',
+                    # 'RANDOM_NO_REGULAR_INITA_3',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_1',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_2',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_3',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_INITA_1',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_INITA_2',
+                    # 'RANDOM_LOGINIT_NO_REGULAR_INITA_3',
                     # 'LOGINIT_NO_REGULAR_RANDOMINIT1',
                     # 'CC_LOGINIT_NO_REGULAR',
                     # 'CC_NO_REGULAR',
@@ -476,6 +483,14 @@ def LeNet():
                     # 'MIX_LOGINIT_L2_NO_REGULAR',
                     # 'MIX_LOGINIT_NO_REGULAR_L2'
                     ]:
+
+        # Check classwise accuracy
+        x,y = get_class_wise_accuracy_vs_NNsize('LeNet', folder)
+        for i in range(10):
+            cur_y = [a[i] for a in y]
+            ax0.plot(x,cur_y,label=folder+str(i))
+        continue
+
         files = os.listdir('./LeNet/eval_efforts_rough/')
         files = filter(lambda a: "Constraint_mnist_GDBack_Compression_"+folder == '_'.join(a.split('_')[:-1]), files)
         models = map(lambda a: a.replace("Constraint_mnist_GDBack_Compression_"+folder,""), files)
@@ -504,7 +519,7 @@ def LeNet():
     #     y0_diff = [y0[i] - y0[i - 1] for i in range(1, len(y0))]
     #     plt.plot(y1,y0,colors[index]+'x',label=folder,)
         index += 1
-    plt.legend(loc=0)
+    ax0.legend(loc=0)
     plt.gca().invert_xaxis()
     plt.show()
     exit()
