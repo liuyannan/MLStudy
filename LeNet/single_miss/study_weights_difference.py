@@ -4,6 +4,50 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 
+def plot_fault_injection_positions():
+
+    f = open('0_0_weights.pkl', 'rb')
+    normal_params = pickle.load(f)
+    f.close()
+    fig, axes = plt.subplots(nrows=2)
+
+    for vul_class in range(10-1):
+        for ad_calss in range(vul_class+1,10):
+            prefix = "{}_{}_".format(vul_class,ad_calss)
+            f = open(prefix+'weights.pkl', 'rb')
+            adver_params = pickle.load(f)
+            f.close()
+
+            f = open(prefix+'ac_degrade_by_diff.pkl', 'rb')
+            ac_list = pickle.load(f)
+            f.close()
+
+            for i in ac_list:
+                if (431080-i[0]) <= 400:
+                    th_abs = i[1]
+                    print "abs threshold is",th_abs
+                    break
+
+            for i in range(4):
+
+                weight = np.reshape(abs(normal_params[2*i].get_value()-adver_params[2*i].get_value()), (-1))
+                total_weight = weight.shape[0]
+                weight_count = (weight > th_abs).sum()
+                axes[0].plot(2*i, weight_count, marker='x')
+                axes[1].plot(2 * i, weight_count*1./total_weight, marker='x')
+                bias = np.reshape(abs(normal_params[2*i+1].get_value()-adver_params[2*i+1].get_value()), (-1))
+                total_bias = bias.shape[0]
+                bias_count = (bias > th_abs).sum()
+                axes[0].plot(2 * i + 1, bias_count, marker='x')
+                axes[1].plot(2 * i + 1, bias_count*1./total_bias, marker='x')
+    xlabel = ['w_3', 'b_3', 'w_2', 'b_2', 'w_1', 'b_1', 'w_0', 'b_0']
+    axes[0].set_xticklabels(xlabel)
+    axes[1].set_xticklabels(xlabel)
+    plt.show()
+            # plt.savefig(imagefile)
+            # plt.close()
+
+
 
 def plot_wb_distribution(paramfile,  imagefile, derivativefile=0):
 
@@ -106,10 +150,10 @@ def draw_accuracy_degrade_by_diff():
             drawx.append(x[k])
             drawy.append(y[k])
         plt.plot(drawx, drawy)
-        # plot_wb_distribution(prefix+'.pkl', dprefix+'.pkl', './fig/'+prefix+'.pdf')
+        plot_wb_distribution(prefix+'.pkl', dprefix+'.pkl', './fig/'+prefix+'.pdf')
     plt.show()
 
 
 if __name__ == '__main__':
-    # draw_accuracy_degrade_by_diff()
-    plot_wb_diff()
+    plot_fault_injection_positions()
+    # plot_wb_diff()

@@ -411,15 +411,15 @@ def LeNet():
                     # 'OBD_LOGINIT_L2',
                     # 'OBD_LOGINIT_NO_REGULAR',
 
-                    # 'NO_REGULAR',
-                    # 'LOGINIT_NO_REGULAR',
+                    'NO_REGULAR',
+                    'LOGINIT_NO_REGULAR',
                     # 'FC_LOGINIT_NO_REGULAR_NOREGULARMASK',
                     # 'LOGINIT_NO_REGULAR_KEEPBIAS',
                     # 'NO_REGULAR_RANDOMINIT1',
                     # 'NO_REGULAR_DROPOUT_0.2',
                     # 'NO_REGULAR_DROPOUT_0.5',
                     # 'NO_REGULAR_DROPOUT_0.9',
-                    'NO_REGULAR_RANDOM1',
+                    # 'NO_REGULAR_RANDOM1',
                     # 'NO_REGULAR_RANDOM2',
                     # 'NO_REGULAR_RANDOM3',
                     # 'NO_REGULAR_RANDOM4',
@@ -440,13 +440,13 @@ def LeNet():
                     # 'CCV3_LOGINIT_NO_REGULAR',
                     # 'CCV2_LBL_LOGINIT_NO_REGULAR',
                     # 'CCV2_LBL_LOGINIT_NO_REGULAR'
-                    # 'L2EN3',
-                    # 'LOGINIT_L2EN3',
+                    'L2EN3',
+                    'LOGINIT_L2EN3',
                     # 'LOGINIT_L2_KEEPBIAS',
                     # 'CCV3_L2',
                     # 'CCV3_LOGINIT_L2',
-                    # 'CONTRACT_LIKE',
-                    # 'LOGINIT_CONTRACT_LIKE',
+                    'CONTRACT_LIKE',
+                    'LOGINIT_CONTRACT_LIKE',
                     # 'LOGINIT_CONTRACT_LIKE_KEEPBIAS',
                     # 'CCV3_CONTRACT_LIKE',
                     # 'CCV3_LOGINIT_CONTRACT_LIKE',
@@ -485,11 +485,11 @@ def LeNet():
                     ]:
 
         # Check classwise accuracy
-        x,y = get_class_wise_accuracy_vs_NNsize('LeNet', folder)
-        for i in range(10):
-            cur_y = [a[i] for a in y]
-            ax0.plot(x,cur_y,label=folder+str(i))
-        continue
+        # x,y = get_class_wise_accuracy_vs_NNsize('LeNet', folder)
+        # for i in range(10):
+        #     cur_y = [a[i] for a in y]
+        #     ax0.plot(x,cur_y,label=folder+str(i))
+        # continue
 
         files = os.listdir('./LeNet/eval_efforts_rough/')
         files = filter(lambda a: "Constraint_mnist_GDBack_Compression_"+folder == '_'.join(a.split('_')[:-1]), files)

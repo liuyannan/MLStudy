@@ -18,11 +18,11 @@ import random
 import theano.sandbox.cuda
 import shutil
 
-#import matplotlib
-#matplotlib.use('Agg')
+import matplotlib
+matplotlib.use('Agg')
 
-#import matplotlib.pyplot as plt
-#import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 
 class LeNetConvPoolLayer(object):
@@ -458,7 +458,7 @@ def load_data(dataset):
 
 
 class LeNet(object):
-    def __init__(self, mu=0.5, learning_rate=0.1, n_epochs=40, dataset='mnist.pkl.gz', nkerns=[20, 50],
+    def __init__(self, mu=0.5, learning_rate=0.1, n_epochs=40, dataset=None, nkerns=[20, 50],
                  batch_size=500, lam_l2=0.001, train_divisor=1, cf_type='L2',lam_contractive=1000,random_seed = 23455, dropout_rate= -1):
         """ Demonstrates lenet on MNIST dataset
 
@@ -484,7 +484,10 @@ class LeNet(object):
         self.train_batch_size = batch_size
         self.net_batch_size = batch_size
         self.train_divisor = train_divisor
-        self.datasets = load_data(dataset)
+        if dataset is None:
+            self.datasets = load_data('mnist.pkl.gz')
+        else:
+            self.datasets = dataset
         self.train_set_x, self.train_set_y = self.datasets[0]
         self.valid_set_x, self.valid_set_y = self.datasets[1]
         self.test_set_x, self.test_set_y = self.datasets[2]
@@ -667,6 +670,17 @@ class LeNet(object):
             on_unused_input='ignore'
         )
 
+        self.prediction_detail = theano.function(
+            [self.index],
+            [y*1, self.layer3.y_pred],
+            givens={
+                x: self.test_set_x[self.index * self.net_batch_size:(self.index + 1) * self.net_batch_size],
+                y: self.test_set_y[self.index * self.net_batch_size: (self.index + 1) * self.net_batch_size],
+                switch_train: numpy.cast['int32'](0)
+            },
+            on_unused_input='ignore'
+        )
+
         self.test_confidencefunc = theano.function(
             [self.index],
             self.layer3.confidence_mean(y),
@@ -690,24 +704,6 @@ class LeNet(object):
             on_unused_input='ignore'
         )
 
-        # second_order_derivatives = []
-        # for ind in range(len(self.params)):
-        #     params_flat = self.params[ind]
-        #     fderiv = T.grad(cost,params_flat)
-        #     # Diagonal Approximation: fderiv = {delta_1, delta_2 ....}. Because cross
-        #     # terms are zero, so \delta(T.sum(fderiv))_1 is \delta_1,1
-        #     h_diagoanl = T.grad(T.sum(fderiv),params_flat)
-        #     second_order_derivatives.append(h_diagoanl)
-        #
-        # self.SecondOrderGradient = theano.function(
-        #     [self.index],
-        #     second_order_derivatives, allow_input_downcast=True,
-        #     givens={
-        #         x: self.train_set_x[self.index * self.net_batch_size:(self.index + 1) * self.net_batch_size],
-        #         y: self.train_set_y[self.index * self.net_batch_size:(self.index + 1) * self.net_batch_size]
-        #     }
-        # )
-
         ########
         # Adversarial related functions
         ########
@@ -716,6 +712,20 @@ class LeNet(object):
         class_grads = T.grad(score, x)
         self.ygradsfunc = theano.function([x, tclass], class_grads, allow_input_downcast=True, on_unused_input='ignore', givens={switch_train:numpy.cast['int32'](0)})
         self.all_proby = theano.function([x], self.layer3.p_y_given_x[0], allow_input_downcast=True, on_unused_input='ignore', givens={switch_train:numpy.cast['int32'](0)})
+
+
+        ########
+        # Fault Injection Related Functions
+        ########
+        grads_py_params = T.grad(score,self.params)
+        attack_perturbation_updates = [(param_i, param_i + grad_i) for param_i, grad_i in zip(self.params, grads_py_params)]
+
+        self.deriv_y2param_func = theano.function(inputs=[x,tclass],
+                                                  #updates=attack_perturbation_updates,
+                                                  outputs=grads_py_params,
+                                                  allow_input_downcast=True,
+                                                  on_unused_input='ignore',
+                                                  givens={switch_train:numpy.cast['int32'](0)})
 
     def get_all_proby_func(self):
         return self.all_proby
@@ -849,6 +859,10 @@ class LeNet(object):
         test_score = numpy.mean(test_losses)
         return test_score
 
+    def get_prediction_detail(self):
+        test_losses = [self.prediction_detail(i) for i in range(self.n_test_batches)]
+        return test_losses
+
 
 def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target_class):
     '''
@@ -865,13 +879,11 @@ def find_ad_sample_backtracking_step1_logsoftmax(gradsfunc, proby, image, target
     epoch = 0
     while epoch < 1000:
         probyvalue, cur_y = proby(transform_img, target_class)
-        probyvalue = numpy.exp(probyvalue)
         gradsvalue = gradsfunc(transform_img, target_class)
         gradmag = (numpy.sum(gradsvalue ** 2)) ** 0.5
 
         if epoch % 10 == 0:
             print("Epoch %i : confidence is %e, and grad is %e" % (epoch, probyvalue, gradmag))
-            conflist.append(probyvalue)
 
         # if probyvalue > 0.99:
         if cur_y == target_class:

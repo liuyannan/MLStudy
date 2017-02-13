@@ -1336,7 +1336,7 @@ def find_fault_injection_points(normal_parameter, adver_parameter, adver_derivat
     layer0 = LeNetConvPoolLayer(rng, input=layer0_input, image_shape=(batch_size, 1, 28, 28),
                                 filter_shape=(nkerns[0], 1, 5, 5), poolsize=(2, 2))
 
-    layer1 = LeNetConvPoolLayer(rng, input=layer0.output, image_shape=(batch_size, nkerns[0], 12, 12), \
+    layer1 = LeNetConvPoolLayer(rng, input=layer0.output, image_shape=(batch_size, nkerns[0], 12, 12),
                                 filter_shape=(nkerns[1], nkerns[0], 5, 5), poolsize=(2, 2))
 
     layer2_input = layer1.output.flatten(2)
@@ -1462,30 +1462,30 @@ if __name__ == '__main__':
 #     f.close()
 # clist_record_file = open('./weight/1partical.lst', 'wb')
 # pickle.dump(clist_record, clist_record_file, protocol=pickle.HIGHEST_PROTOCOL)
-# clist_record_file.close()
+# nclist_record_file.close()
 
-# adver_dict_set = []
-# for ind in range(0,10):
-#     adveramp = generate_adver_map(10,1)
-#     adver_dict_set.append(adveramp)
-#     adveramp[0].sort()
-#     i = adveramp[0][0]
-#     j = adveramp[0][1]
-#     adver_dict = range(0, 10)
-#     adver_dict[i] = j
-#     f = open('./single_miss/0_0_weights.pkl', 'rb')
-#     normal_params = pickle.load(f)
-#     f.close()
-#     f = open('./single_miss/' + str(i) + '_' + str(j) + '_weights.pkl', 'rb')
-#     parameters = pickle.load(f)
-#     f.close()
-#     f = open('./single_miss/' + str(i) + '_' + str(j) + '_deriative.pkl', 'rb')
-#     derivative = pickle.load(f)
-#     f.close()
-#     # find_fault_injection_points(normal_params, parameters, derivative, adver_dict)
-#     # plt.savefig('./single_miss/fig/'+ str(i) + '_' + str(j) +'_diff_distribute.pdf')
-#     # plt.close()
-#     result = find_fault_injection_points(normal_params, parameters, derivative, adver_dict)
-#     f = open('./single_miss/'+str(i) + '_' + str(j) + '_ac_degrade_by_diff_smallfirst.pkl', 'wb')
-#     pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
-#     f.close()
+adver_dict_set = []
+for ind in range(0,10):
+    _, adveramp = generate_adver_dict(10,1)
+    adver_dict_set.append(adveramp)
+    adveramp[0].sort()
+    i = adveramp[0][0]
+    j = adveramp[0][1]
+    adver_dict = range(0, 10)
+    adver_dict[i] = j
+    f = open('./single_miss/0_0_weights.pkl', 'rb')
+    normal_params = pickle.load(f)
+    f.close()
+    f = open('./single_miss/' + str(i) + '_' + str(j) + '_weights.pkl', 'rb')
+    parameters = pickle.load(f)
+    f.close()
+    f = open('./single_miss/' + str(i) + '_' + str(j) + '_deriative.pkl', 'rb')
+    derivative = pickle.load(f)
+    f.close()
+    # find_fault_injection_points(normal_params, parameters, derivative, adver_dict)
+    # plt.savefig('./single_miss/fig/'+ str(i) + '_' + str(j) +'_diff_distribute.pdf')
+    # plt.close()
+    result = find_fault_injection_points(normal_params, parameters, derivative, adver_dict)
+    f = open('./single_miss/'+str(i) + '_' + str(j) + '_ac_degrade_by_diff_smallfirst.pkl', 'wb')
+    pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+    f.close()
